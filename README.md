@@ -4,9 +4,8 @@
 
 NetGuard watches your own local network the way a small blue-team sensor would:
 it keeps an inventory of every device, warns you when an unknown device joins,
-and (in upcoming milestones) detects ARP spoofing / man-in-the-middle attempts
-and port scans, audits your own devices for risky open services, and shows it
-all on a local web dashboard.
+detects ARP spoofing / man-in-the-middle attempts and port scans, and audits
+your own devices for risky open services. A local web dashboard is next.
 
 > **Scope:** NetGuard is a defensive tool for networks you own or administer.
 > It refuses to scan public IP ranges or networks larger than a /20.
@@ -22,7 +21,7 @@ all on a local web dashboard.
 | Continuous monitoring, presence timeline, JSON-lines log, notify hook | ✅ M3 |
 | ARP spoofing / MITM detection (live or from a pcap) | ✅ M4 |
 | Port-scan and host-sweep detection | ✅ M5 |
-| Device audit report (open ports, risky services) | 🔜 M6 |
+| Device audit: open ports, banners, risky services, Markdown/HTML report | ✅ M6 |
 | Web dashboard | 🔜 M7 |
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the full plan.
@@ -65,6 +64,10 @@ sudo .venv/bin/netguard monitor --interval 300
 sudo .venv/bin/netguard watch
 .venv/bin/netguard watch --pcap capture.pcap --gateway 192.168.1.1   # offline, no root
 .venv/bin/netguard gateway list
+
+# Audit your own devices for open ports and risky services (no root needed)
+.venv/bin/netguard audit --report audit.html
+.venv/bin/netguard audit --target 192.168.100.1 --ports 1-1024
 
 # Optional: download the MAC vendor list once (resumes if the connection drops)
 .venv/bin/netguard oui update
@@ -151,6 +154,40 @@ at most 10,000 sources, so a scan from spoofed addresses cannot exhaust
 memory. Very slow scans (`nmap -T1`) stay below any sensible threshold and are
 out of scope. Only IPv4 is covered for now.
 
+### Device audit
+
+`netguard audit` checks the devices in your inventory (all online ones by
+default) for open TCP ports, reads what each service says about itself, and
+explains what is risky:
+
+```
+$ netguard audit --target 192.168.100.1 --report audit.html
+Auditing 1 device(s), 30 port(s) each...
+IP             PORT  SERVICE  BANNER
+-------------  ----  -------  ----------------------
+192.168.100.1  53    DNS
+192.168.100.1  80    HTTP     HTTP/1.1 404 Not Found
+[MEDIUM] 192.168.100.1:80 Router admin page only over plain HTTP
+```
+
+- It is a **TCP connect scan** (no root, no crafted packets) of 30 common
+  home-network ports by default, or `--ports 1-1024` / `--ports 22,80,443`
+  (at most 1024 per device). Connections are limited (`--concurrency`, default
+  100) and time out after `--timeout` seconds.
+- **Banners:** services like SSH and FTP announce themselves; on web ports
+  NetGuard sends a single `HEAD /` request and reads the `Server` header. On
+  TLS ports it only checks that a handshake works. Nothing else is ever sent:
+  no logins, no exploits.
+- **Rules** flag, for example, Telnet, VNC and databases reachable from the
+  network (high), FTP, SMB, RDP, camera streams, TR-069 and a router admin
+  page without HTTPS (medium), and OpenSSH older than 8.0 (low), each with a
+  short "why it matters / what to do".
+- Only devices already in the inventory can be audited, and public addresses
+  are refused: this is for your own network.
+- Reports are Markdown or a standalone HTML page (`--report audit.md|html`),
+  and every audit is saved to the database and noted on the timeline.
+- UDP services (e.g. UPnP/SSDP on 1900, DNS over UDP) are not checked.
+
 `--pcap` replays a capture (e.g. from `tcpdump -w`) through the same detector.
 It needs no root and writes nothing, which makes it handy for forensics.
 
@@ -199,6 +236,7 @@ src/netguard/
   monitor.py      the scan loop behind `netguard monitor`
   alerting.py     console output, JSON-lines log and command hook
   sensor/         sniffer.py: live capture (ARP + TCP SYN) and pcap replay (Scapy)
+  audit/          scanner.py (asyncio connect scan), rules.py, report.py
   oui.py          MAC vendor lookup and resumable download
   discovery/      arp_scan.py (active), arp_table.py (passive)
   detectors/      new_device.py, presence.py, arp_spoof.py, portscan.py

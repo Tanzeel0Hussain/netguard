@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import ipaddress
 import logging
 import sys
@@ -14,13 +15,16 @@ from pathlib import Path
 
 from netguard import __version__
 from netguard.alerting import Dispatcher
+from netguard.audit.report import AuditedHost, AuditResult, to_html, to_markdown
+from netguard.audit.rules import assess, service_name
+from netguard.audit.scanner import COMMON_PORTS, scan_hosts
 from netguard.config import Config, load_config
 from netguard.detectors.arp_spoof import ArpFindings, ArpWatch, ArpWatchSettings
 from netguard.detectors.portscan import PortScanSettings, PortScanWatch, TcpSyn
 from netguard.discovery import ScanPermissionError, discover
 from netguard.discovery.arp_table import read_arp_table
 from netguard.engine import ScanResult, process_scan, record_findings
-from netguard.models import is_randomized_mac, normalize_mac, utcnow
+from netguard.models import Event, is_randomized_mac, normalize_mac, utcnow
 from netguard.netinfo import (
     UnsafeTargetError,
     current_bssid,
@@ -34,6 +38,7 @@ from netguard.sensor.sniffer import capture, open_capture, read_pcap
 from netguard.storage import Store
 
 VENDOR_WIDTH = 28
+MAX_AUDIT_PORTS = 1024  # per device; a full 65535-port sweep is not what a home audit needs
 MIN_INTERVAL = 10  # seconds; scanning more often only adds noise to the network
 
 
@@ -94,6 +99,16 @@ def build_parser() -> argparse.ArgumentParser:
     gateway_sub.add_parser("list", help="show accepted gateway MACs")
     allow = gateway_sub.add_parser("allow", help="accept a MAC as the gateway on the current network")
     allow.add_argument("mac")
+
+    audit = sub.add_parser("audit", help="check your devices for open ports and risky services")
+    audit.add_argument(
+        "--target", action="append", metavar="IP_OR_MAC",
+        help="device to audit (repeatable; default: every device that is online)",
+    )
+    audit.add_argument("--ports", default="common", help='"common" (default), "1-1024" or "22,80,443"')
+    audit.add_argument("--report", type=Path, help="write a report: .md or .html")
+    audit.add_argument("--timeout", type=float, default=1.0, help="seconds per connection")
+    audit.add_argument("--concurrency", type=int, default=100, help="connections open at once")
 
     alerts = sub.add_parser("alerts", help="show recent alerts")
     alerts.add_argument("--limit", type=int, default=20)
@@ -404,6 +419,109 @@ def cmd_gateway(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def cmd_audit(args: argparse.Namespace, config: Config) -> int:
+    ports = parse_ports(args.ports)
+    if not 1 <= args.concurrency <= 500:
+        raise ValueError("--concurrency must be between 1 and 500")
+    if args.report and args.report.suffix.lower() not in (".md", ".html"):
+        raise ValueError("--report must end in .md or .html")
+
+    vendors = VendorDB.load(config.oui_path)
+    with Store(config.db_path) as store:
+        devices = _audit_targets(store, args.target)
+        hosts = [
+            AuditedHost(d.ip, d.mac, d.label or vendors.lookup(d.mac) or "") for d in devices
+        ]
+        try:
+            gateway = detect_netinfo(iface=config.iface).gateway
+        except (OSError, RuntimeError):
+            gateway = None
+
+        print(f"Auditing {len(hosts)} device(s), {len(ports)} port(s) each...", flush=True)
+        started = utcnow()
+        open_ports = asyncio.run(
+            scan_hosts([h.ip for h in hosts], ports, timeout=args.timeout, concurrency=args.concurrency)
+        )
+        result = AuditResult(
+            started_at=started,
+            hosts=hosts,
+            ports_checked=len(ports),
+            open_ports=open_ports,
+            findings=assess(open_ports, gateway_ip=str(gateway) if gateway else None),
+        )
+        store.save_audit(result)
+        counts = result.counts()
+        summary = ", ".join(f"{counts[s]} {s}" for s in ("high", "medium", "low") if counts[s])
+        store.add_events(
+            [Event("audit", f"Audited {len(hosts)} device(s): {summary or 'no findings'}", started)]
+        )
+
+    if open_ports:
+        rows = [
+            [p.ip, str(p.port), service_name(p.port) + (" (TLS)" if p.tls else ""), p.banner[:60]]
+            for p in sorted(open_ports, key=lambda p: (ipaddress.ip_address(p.ip), p.port))
+        ]
+        print(_table(["IP", "PORT", "SERVICE", "BANNER"], rows))
+    else:
+        print("No open ports found.")
+    for f in result.findings:
+        print(f"[{f.severity.upper()}] {f.ip}:{f.port or ''} {f.title}")
+    print(f"\n{len(open_ports)} open port(s), {summary or 'no findings'}.")
+
+    if args.report:
+        text = to_html(result) if args.report.suffix.lower() == ".html" else to_markdown(result)
+        args.report.write_text(text, encoding="utf-8")
+        print(f"Report written to {args.report}")
+    return 0
+
+
+def parse_ports(spec: str) -> list[int]:
+    """'common', '1-1024', '22,80,443' or a mix like '22,8000-8100'."""
+    if spec == "common":
+        return list(COMMON_PORTS)
+    ports: set[int] = set()
+    for part in spec.split(","):
+        part = part.strip()
+        low, sep, high = part.partition("-")
+        try:
+            start, end = int(low), int(high) if sep else int(low)
+        except ValueError:
+            raise ValueError(f"bad port list {spec!r}; use e.g. 22,80,443 or 1-1024") from None
+        if not 1 <= start <= end <= 65535:
+            raise ValueError(f"bad port range {part!r}; ports go from 1 to 65535")
+        ports.update(range(start, end + 1))
+    if len(ports) > MAX_AUDIT_PORTS:
+        raise ValueError(f"{len(ports)} ports is too many; the limit is {MAX_AUDIT_PORTS} per device")
+    return sorted(ports)
+
+
+def _audit_targets(store: Store, targets: list[str] | None) -> list:
+    """Devices to audit. Only devices in the inventory: this is for your own network."""
+    devices = store.devices()
+    if not targets:
+        chosen = [d for d in devices if d.present]
+        if not chosen:
+            raise RuntimeError("no online devices in the inventory; run `netguard scan` first")
+        return sorted(chosen, key=lambda d: ipaddress.ip_address(d.ip))
+
+    by_ip = {d.ip: d for d in devices}
+    by_mac = {d.mac: d for d in devices}
+    chosen = []
+    for target in targets:
+        try:
+            device = by_mac.get(normalize_mac(target))
+        except ValueError:
+            device = by_ip.get(target)
+        if device is None:
+            raise ValueError(
+                f"{target} is not in the inventory. NetGuard only audits devices it has "
+                "discovered on your network; run `netguard scan` first."
+            )
+        validate_scan_target(ipaddress.ip_network(device.ip))
+        chosen.append(device)
+    return chosen
+
+
 def cmd_timeline(args: argparse.Namespace, config: Config) -> int:
     mac = normalize_mac(args.mac) if args.mac else None
     with Store(config.db_path) as store:
@@ -429,6 +547,7 @@ COMMANDS = {
     "monitor": cmd_monitor,
     "watch": cmd_watch,
     "gateway": cmd_gateway,
+    "audit": cmd_audit,
     "timeline": cmd_timeline,
     "devices": cmd_devices,
     "trust": cmd_trust,

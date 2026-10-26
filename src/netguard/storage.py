@@ -7,6 +7,9 @@ from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
+from netguard.audit.report import AuditedHost, AuditResult
+from netguard.audit.rules import Finding
+from netguard.audit.scanner import OpenPort
 from netguard.config import hand_back_to_sudo_user
 from netguard.models import Alert, Device, Event, Observation
 
@@ -62,6 +65,35 @@ MIGRATIONS = [
         mac        TEXT NOT NULL,
         first_seen TEXT NOT NULL,
         PRIMARY KEY (bssid, gateway_ip, mac)
+    );
+    """,
+    # 4: device audits (open ports and findings)
+    """
+    CREATE TABLE audits (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at    TEXT NOT NULL,
+        ports_checked INTEGER NOT NULL
+    );
+    CREATE TABLE audit_hosts (
+        audit_id INTEGER NOT NULL REFERENCES audits (id),
+        ip       TEXT NOT NULL,
+        mac      TEXT NOT NULL,
+        name     TEXT NOT NULL
+    );
+    CREATE TABLE audit_ports (
+        audit_id INTEGER NOT NULL REFERENCES audits (id),
+        ip       TEXT NOT NULL,
+        port     INTEGER NOT NULL,
+        banner   TEXT NOT NULL,
+        tls      INTEGER NOT NULL
+    );
+    CREATE TABLE audit_findings (
+        audit_id INTEGER NOT NULL REFERENCES audits (id),
+        ip       TEXT NOT NULL,
+        port     INTEGER,
+        severity TEXT NOT NULL,
+        title    TEXT NOT NULL,
+        detail   TEXT NOT NULL
     );
     """,
 ]
@@ -201,6 +233,51 @@ class Store:
             "SELECT * FROM gateway_macs ORDER BY bssid, gateway_ip, first_seen"
         )
         return [(r["bssid"], r["gateway_ip"], r["mac"], _dt(r["first_seen"])) for r in rows]
+
+    # --- audits ----------------------------------------------------------
+
+    def save_audit(self, result: AuditResult) -> int:
+        with self.conn:
+            audit_id = self.conn.execute(
+                "INSERT INTO audits (started_at, ports_checked) VALUES (?, ?)",
+                (_ts(result.started_at), result.ports_checked),
+            ).lastrowid
+            self.conn.executemany(
+                "INSERT INTO audit_hosts VALUES (?, ?, ?, ?)",
+                [(audit_id, h.ip, h.mac, h.name) for h in result.hosts],
+            )
+            self.conn.executemany(
+                "INSERT INTO audit_ports VALUES (?, ?, ?, ?, ?)",
+                [(audit_id, p.ip, p.port, p.banner, int(p.tls)) for p in result.open_ports],
+            )
+            self.conn.executemany(
+                "INSERT INTO audit_findings VALUES (?, ?, ?, ?, ?, ?)",
+                [(audit_id, f.ip, f.port, f.severity, f.title, f.detail) for f in result.findings],
+            )
+        return audit_id
+
+    def latest_audit(self) -> AuditResult | None:
+        row = self.conn.execute("SELECT * FROM audits ORDER BY id DESC LIMIT 1").fetchone()
+        if row is None:
+            return None
+        audit_id = row["id"]
+
+        def query(table: str) -> sqlite3.Cursor:
+            # `table` is always one of our own constant names, never user input.
+            return self.conn.execute(f"SELECT * FROM {table} WHERE audit_id = ?", (audit_id,))
+
+        return AuditResult(
+            started_at=_dt(row["started_at"]),
+            ports_checked=row["ports_checked"],
+            hosts=[AuditedHost(r["ip"], r["mac"], r["name"]) for r in query("audit_hosts")],
+            open_ports=[
+                OpenPort(r["ip"], r["port"], r["banner"], bool(r["tls"])) for r in query("audit_ports")
+            ],
+            findings=[
+                Finding(r["ip"], r["port"], r["severity"], r["title"], r["detail"])
+                for r in query("audit_findings")
+            ],
+        )
 
     # --- events ----------------------------------------------------------
 
