@@ -10,6 +10,9 @@ your own devices for risky open services. A local web dashboard is next.
 > **Scope:** NetGuard is a defensive tool for networks you own or administer.
 > It refuses to scan public IP ranges or networks larger than a /20.
 
+**New here? Read the step-by-step guide: [docs/USAGE.md](docs/USAGE.md).** It
+covers what NetGuard can do, how to do each task, and what every alert means.
+
 ## Status
 
 | Feature | Status |
