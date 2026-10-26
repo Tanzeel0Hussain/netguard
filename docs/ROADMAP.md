@@ -54,12 +54,17 @@ Each milestone is one small, reviewable pull request with its own tests.
 - Tracked sources are capped (LRU), so spoofed sources cannot exhaust memory.
 - Tests replay an nmap-style SYN scan through the CLI.
 
-## M6: Device audit report
+## M6: Device audit report ✅
 
-- TCP connect scan of common ports on inventory devices only.
-- Banner grab and service guess; flag risky services (Telnet, FTP, SMB, RDP,
-  UPnP, exposed admin panels).
-- Markdown and HTML report: `netguard audit --report report.html`.
+- `netguard audit`: asyncio TCP connect scan of inventory devices only, 30
+  common ports by default (`--ports` up to 1024), with a concurrency limit and
+  per-connection timeout.
+- Banner grab (services that speak first, `HEAD /` on web ports, TLS
+  handshake check) and service names.
+- Risk rules with severity and advice: Telnet, VNC, open databases, FTP, SMB,
+  RDP, RTSP, TR-069, MQTT, UPnP, old OpenSSH, router admin page without HTTPS.
+- Markdown and HTML reports (banners are escaped: a device cannot inject into
+  the report), saved to the database (schema v4) and the timeline.
 
 ## M7: Web dashboard
 
