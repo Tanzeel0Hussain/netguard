@@ -62,7 +62,7 @@ def test_probe_reads_banners_and_skips_closed_ports():
 
 def test_silent_service_is_still_reported_open():
     async def silent(reader, writer):
-        await asyncio.sleep(2)
+        await reader.read()  # say nothing; return once the client hangs up
         writer.close()
 
     async def run():
