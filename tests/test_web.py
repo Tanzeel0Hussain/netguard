@@ -5,6 +5,7 @@ import pytest
 pytest.importorskip("flask")
 
 from netguard import cli  # noqa: E402
+from netguard.config import Config  # noqa: E402
 from netguard.audit.report import AuditedHost, AuditResult  # noqa: E402
 from netguard.audit.rules import assess  # noqa: E402
 from netguard.audit.scanner import OpenPort  # noqa: E402
@@ -39,7 +40,7 @@ def db(tmp_path):
 
 @pytest.fixture
 def client(db, tmp_path):
-    app = create_app(db, tmp_path / "no-manuf")
+    app = create_app(Config(db_path=db, oui_path=tmp_path / "no-manuf"))
     return app.test_client()
 
 
@@ -106,7 +107,7 @@ def test_json_api(client):
 
 
 def test_empty_database(tmp_path):
-    client = create_app(tmp_path / "empty.db", tmp_path / "no-manuf").test_client()
+    client = create_app(Config(db_path=tmp_path / "empty.db", oui_path=tmp_path / "no-manuf")).test_client()
     assert "No devices yet" in get(client, "/devices").get_data(as_text=True)
     assert "No audit yet" in get(client, "/audit").get_data(as_text=True)
     assert get(client, "/api/audit").get_json() is None
@@ -116,7 +117,7 @@ def test_alerts_today_ignores_old_alerts(db, tmp_path):
     with Store(db) as store:
         old = utcnow() - timedelta(days=3)
         store.add_alerts([Alert("new_device", "warning", "old one", old, "aa:aa:aa:aa:aa:99", "192.168.1.99")])
-    page = get(create_app(db, tmp_path / "x").test_client(), "/").get_data(as_text=True)
+    page = get(create_app(Config(db_path=db, oui_path=tmp_path / "x")).test_client(), "/").get_data(as_text=True)
     assert "alerts in the last 24 h, 1 critical" in page
 
 

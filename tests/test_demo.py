@@ -60,10 +60,11 @@ def test_demo_database_tells_a_story(demo):
 
 def test_demo_database_renders_in_the_dashboard(demo):
     pytest.importorskip("flask")
+    from netguard.config import Config
     from netguard.web import create_app
 
     _, folder = demo
-    client = create_app(folder / "netguard.db", folder / "no-manuf").test_client()
+    client = create_app(Config(db_path=folder / "netguard.db", oui_path=folder / "no-manuf")).test_client()
     page = client.get("/", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
     assert "1 critical" in page
     audit = client.get("/audit", headers={"Host": "127.0.0.1"}).get_data(as_text=True)

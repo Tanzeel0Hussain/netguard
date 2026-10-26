@@ -7,6 +7,7 @@ import ipaddress
 import logging
 import sys
 import threading
+import webbrowser
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -103,9 +104,14 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--timeout", type=float, default=1.0, help="seconds per connection")
     audit.add_argument("--concurrency", type=int, default=100, help="connections open at once")
 
-    web = sub.add_parser("web", help="open the read-only dashboard in your browser")
-    web.add_argument("--host", default="127.0.0.1", help="loopback address to listen on")
-    web.add_argument("--port", type=int, default=8080)
+    for name, help_text in (
+        ("gui", "open the dashboard in your browser (scan, audit and name devices from there)"),
+        ("web", "serve the dashboard without opening a browser (e.g. as a service)"),
+    ):
+        web = sub.add_parser(name, help=help_text)
+        web.add_argument("--host", default="127.0.0.1", help="loopback address to listen on")
+        web.add_argument("--port", type=int, default=8080)
+        web.add_argument("--read-only", action="store_true", help="hide the buttons; only show data")
 
     demo = sub.add_parser("demo", help="create made-up data and attack captures to try NetGuard")
     demo.add_argument("folder", nargs="?", type=Path, default=Path("netguard-demo"))
@@ -484,9 +490,13 @@ def cmd_web(args: argparse.Namespace, config: Config) -> int:
         # The dashboard has no login: anyone who can reach it sees your network.
         raise ValueError(f"{args.host} is not a loopback address; the dashboard only runs on 127.0.0.1")
 
-    app = create_app(config.db_path, config.oui_path)
+    app = create_app(config, read_only=args.read_only)
     host = f"[{args.host}]" if ":" in args.host else args.host
-    print(f"NetGuard dashboard on http://{host}:{args.port}/ (Ctrl+C to stop)")
+    url = f"http://{host}:{args.port}/"
+    print(f"NetGuard dashboard on {url} (Ctrl+C to stop)")
+    if args.command == "gui":
+        # Open the browser once the server is listening.
+        threading.Timer(1.0, webbrowser.open, args=(url,)).start()
     from werkzeug.serving import run_simple
 
     run_simple(args.host, args.port, app, threaded=True)
@@ -525,6 +535,7 @@ COMMANDS = {
     "gateway": cmd_gateway,
     "audit": cmd_audit,
     "web": cmd_web,
+    "gui": cmd_web,
     "demo": cmd_demo,
     "timeline": cmd_timeline,
     "devices": cmd_devices,

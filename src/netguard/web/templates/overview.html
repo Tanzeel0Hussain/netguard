@@ -1,7 +1,15 @@
 {% extends "base.html" %}
 {% from "_macros.html" import timeline_table, when %}
 {% block content %}
-<h1>Overview</h1>
+<div class="title-row">
+  <h1>Overview</h1>
+  {% if not read_only %}
+  <form method="post" action="{{ url_for('scan') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Scan now</button>
+  </form>
+  {% endif %}
+</div>
 <section class="tiles">
   <a class="tile" href="{{ url_for('devices') }}">
     <span class="value">{{ online }}<small> / {{ total }}</small></span>

@@ -2,7 +2,16 @@
 {% from "_macros.html" import when %}
 {% block title %}Audit · NetGuard{% endblock %}
 {% block content %}
-<h1>Latest audit</h1>
+<div class="title-row">
+  <h1>Latest audit</h1>
+  {% if not read_only %}
+  <form method="post" action="{{ url_for('run_audit') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Run audit now</button>
+  </form>
+  {% endif %}
+</div>
+<p class="hint">Checks every online device for 30 common ports and risky services. Takes a few seconds.</p>
 {% if audit %}
 <p class="hint">{{ when(audit.started_at) }} · {{ audit.hosts|length }} device(s) · {{ audit.ports_checked }} ports checked per device · {{ audit.open_ports|length }} open port(s)</p>
 
@@ -44,6 +53,6 @@
 <p class="empty">No open ports found.</p>
 {% endif %}
 {% else %}
-<p class="empty">No audit yet. Run <code>netguard audit</code>.</p>
+<p class="empty">No audit yet.{% if read_only %} Run <code>netguard audit</code>.{% endif %}</p>
 {% endif %}
 {% endblock %}
