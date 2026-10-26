@@ -21,7 +21,7 @@ all on a local web dashboard.
 | MAC vendor lookup, randomised-MAC detection, device labels | ✅ M2 |
 | Continuous monitoring, presence timeline, JSON-lines log, notify hook | ✅ M3 |
 | ARP spoofing / MITM detection (live or from a pcap) | ✅ M4 |
-| Port-scan detection | 🔜 M5 |
+| Port-scan and host-sweep detection | ✅ M5 |
 | Device audit report (open ports, risky services) | 🔜 M6 |
 | Web dashboard | 🔜 M7 |
 
@@ -61,7 +61,7 @@ sudo .venv/bin/netguard scan
 sudo .venv/bin/netguard monitor --interval 300
 .venv/bin/netguard timeline
 
-# Watch ARP traffic for spoofing / man-in-the-middle
+# Watch for ARP spoofing / man-in-the-middle and port scans
 sudo .venv/bin/netguard watch
 .venv/bin/netguard watch --pcap capture.pcap --gateway 192.168.1.1   # offline, no root
 .venv/bin/netguard gateway list
@@ -134,6 +134,23 @@ replies sent to itself, so it reliably detects attacks against itself and
 broadcast poisoning, but not an attack between two other devices. Run it on an
 always-on machine, or use a mirror port, to watch more.
 
+### Port-scan detection
+
+The same `netguard watch` also captures TCP SYN packets without ACK (new
+connection attempts; the kernel filter drops everything else) and raises:
+
+| Alert | Trigger (defaults) |
+|---|---|
+| `port_scan` | one source sends SYNs to 15+ different ports of one host within 60 s (e.g. `nmap -sS`) |
+| `host_sweep` | one source sends SYNs to the same port on 10+ hosts within 60 s |
+
+Browsing opens many connections but to few ports, so it stays quiet. This
+machine is never flagged (so NetGuard's own audit does not alert), and
+`[portscan] allow` lists other scanners you run yourself. State is kept for
+at most 10,000 sources, so a scan from spoofed addresses cannot exhaust
+memory. Very slow scans (`nmap -T1`) stay below any sensible threshold and are
+out of scope. Only IPv4 is covered for now.
+
 `--pcap` replays a capture (e.g. from `tcpdump -w`) through the same detector.
 It needs no root and writes nothing, which makes it handy for forensics.
 
@@ -181,10 +198,10 @@ src/netguard/
   engine.py       runs detectors on a scan and saves the results
   monitor.py      the scan loop behind `netguard monitor`
   alerting.py     console output, JSON-lines log and command hook
-  sensor/         arp_sniffer.py: live ARP capture and pcap replay (Scapy)
+  sensor/         sniffer.py: live capture (ARP + TCP SYN) and pcap replay (Scapy)
   oui.py          MAC vendor lookup and resumable download
   discovery/      arp_scan.py (active), arp_table.py (passive)
-  detectors/      new_device.py, presence.py, arp_spoof.py
+  detectors/      new_device.py, presence.py, arp_spoof.py, portscan.py
 tests/            pytest suite, no root or network needed
 ```
 

@@ -65,6 +65,10 @@ class Config:
     arp_window: float = 60  # seconds, for the many-IPs and reply-flood checks
     arp_many_ips: int = 3
     arp_flood_replies: int = 15
+    portscan_window: float = 60  # seconds
+    portscan_ports: int = 15  # distinct ports on one host within the window
+    portscan_hosts: int = 10  # distinct hosts on one port within the window
+    portscan_allow: list[str] = field(default_factory=list)  # source IPs never flagged
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -82,6 +86,7 @@ def load_config(path: Path | None = None) -> Config:
     monitor = data.get("monitor", {})
     alerts = data.get("alerts", {})
     arp = data.get("arp", {})
+    portscan = data.get("portscan", {})
     config = Config(
         iface=network.get("iface"),
         network=network.get("cidr"),
@@ -93,6 +98,10 @@ def load_config(path: Path | None = None) -> Config:
         arp_window=float(arp.get("window", 60)),
         arp_many_ips=int(arp.get("many_ips", 3)),
         arp_flood_replies=int(arp.get("flood_replies", 15)),
+        portscan_window=float(portscan.get("window", 60)),
+        portscan_ports=int(portscan.get("ports", 15)),
+        portscan_hosts=int(portscan.get("hosts", 10)),
+        portscan_allow=[str(ip) for ip in portscan.get("allow", [])],
     )
     if config.alert_command is not None and (
         not isinstance(config.alert_command, list)

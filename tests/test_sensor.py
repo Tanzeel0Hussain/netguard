@@ -3,6 +3,7 @@ import subprocess
 import pytest
 
 from netguard import cli
+from netguard.detectors.portscan import TcpSyn
 from netguard.netinfo import current_bssid, own_macs, parse_iw_link, parse_nmcli_bssid
 
 scapy = pytest.importorskip("scapy")
@@ -10,7 +11,7 @@ from scapy.layers.inet import IP, TCP  # noqa: E402
 from scapy.layers.l2 import ARP, Ether  # noqa: E402
 from scapy.utils import wrpcap  # noqa: E402
 
-from netguard.sensor.arp_sniffer import packet_from_scapy, read_pcap  # noqa: E402
+from netguard.sensor.sniffer import parse_packet, read_pcap  # noqa: E402
 
 GATEWAY_IP = "192.168.1.1"
 ROUTER = "8c:6d:77:00:00:01"
@@ -40,18 +41,35 @@ def attack_capture(path):
     wrpcap(str(path), packets)
 
 
-def test_packet_from_scapy():
+def test_parse_arp_packet():
     pkt = arp(2, "8C:6D:77:00:00:01", GATEWAY_IP, VICTIM, "192.168.1.50", 1_790_000_000.5)
-    parsed = packet_from_scapy(pkt)
+    parsed = parse_packet(pkt)
     assert (parsed.op, parsed.sender_mac, parsed.sender_ip) == (2, ROUTER, GATEWAY_IP)
     assert parsed.at.timestamp() == 1_790_000_000.5
-    assert packet_from_scapy(Ether() / IP()) is None
+    assert parse_packet(Ether() / IP()) is None
 
 
-def test_read_pcap_keeps_only_arp(tmp_path):
+def test_parse_tcp_syn_only():
+    syn = Ether(src=ATTACKER, dst=VICTIM) / IP(src="192.168.1.66", dst="192.168.1.50") / TCP(
+        dport=22, flags="S"
+    )
+    syn.time = 1_790_000_000.0
+    parsed = parse_packet(syn)
+    assert isinstance(parsed, TcpSyn)
+    assert (parsed.src_mac, parsed.src_ip, parsed.dst_ip, parsed.dst_port) == (
+        ATTACKER,
+        "192.168.1.66",
+        "192.168.1.50",
+        22,
+    )
+    for flags in ("SA", "A", "PA", "R"):  # replies and ongoing connections
+        assert parse_packet(Ether() / IP() / TCP(flags=flags)) is None
+
+
+def test_read_pcap_keeps_arp_and_syns(tmp_path):
     attack_capture(tmp_path / "attack.pcap")
     packets = list(read_pcap(tmp_path / "attack.pcap"))
-    assert len(packets) == 22
+    assert len(packets) == 23  # 22 ARP + the one TCP SYN to port 443
     assert packets[0].sender_mac == VICTIM
 
 
@@ -66,7 +84,7 @@ def test_watch_finds_the_attack_in_a_capture(tmp_path, capsys, monkeypatch):
     assert f"[i] Gateway {GATEWAY_IP} is at {ROUTER}" in out
     assert f"[!] Gateway {GATEWAY_IP} is claimed by {ATTACKER}" in out
     assert f"{ATTACKER} sent 15 unsolicited ARP replies" in out
-    assert "Done. 22 ARP packet(s), 2 alert(s)." in out
+    assert "Done. 22 ARP packet(s), 1 TCP SYN(s), 2 alert(s)." in out
     # Offline analysis writes nothing.
     assert not (tmp_path / ".local").exists()
 
@@ -135,7 +153,7 @@ def replay_socket(path):
 def test_capture_survives_a_failing_handler(tmp_path):
     import threading
 
-    from netguard.sensor.arp_sniffer import capture_arp
+    from netguard.sensor.sniffer import capture
 
     attack_capture(tmp_path / "attack.pcap")
     stop, seen = threading.Event(), []
@@ -144,22 +162,22 @@ def test_capture_survives_a_failing_handler(tmp_path):
         seen.append(pkt)
         if len(seen) == 1:
             raise RuntimeError("bug in a detector")  # must not end the capture
-        if len(seen) == 22:
+        if len(seen) == 23:
             stop.set()
 
-    capture_arp(replay_socket(tmp_path / "attack.pcap"), on_packet, stop)
-    assert len(seen) == 22
+    capture(replay_socket(tmp_path / "attack.pcap"), on_packet, stop)
+    assert len(seen) == 23
 
 
 def test_capture_reports_a_dead_socket(tmp_path):
     import threading
 
-    from netguard.sensor.arp_sniffer import CaptureStoppedError, capture_arp
+    from netguard.sensor.sniffer import CaptureStoppedError, capture
 
     attack_capture(tmp_path / "attack.pcap")
     with pytest.raises(CaptureStoppedError, match="interface still up"):
         # The file ends (like a socket dying) while nobody asked to stop.
-        capture_arp(replay_socket(tmp_path / "attack.pcap"), lambda pkt: None, threading.Event())
+        capture(replay_socket(tmp_path / "attack.pcap"), lambda pkt: None, threading.Event())
 
 
 def test_capture_socket_decodes_ethernet_in_a_fresh_process():
@@ -170,7 +188,7 @@ def test_capture_socket_decodes_ethernet_in_a_fresh_process():
 
     code = """
 from scapy.config import conf
-import netguard.sensor.arp_sniffer as sniffer
+import netguard.sensor.sniffer as sniffer
 seen = {}
 def fake_listen(**kwargs):
     seen["ether"] = conf.l2types.num2layer.get(1)
@@ -186,3 +204,51 @@ print(seen["ether"].__name__)
     )
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == "Ether"
+
+
+def scan_capture(path, ports=range(1, 101), src="192.168.1.66"):
+    """What `nmap -sS -p1-100 192.168.1.50` looks like: SYNs, a few ms apart."""
+    t = 1_790_000_000.0
+    packets = []
+    for n, port in enumerate(ports):
+        pkt = Ether(src=ATTACKER, dst=VICTIM) / IP(src=src, dst="192.168.1.50") / TCP(
+            sport=40000, dport=port, flags="S"
+        )
+        pkt.time = t + n * 0.005
+        packets.append(pkt)
+    wrpcap(str(path), packets)
+
+
+def test_watch_finds_an_nmap_style_scan(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    capture_file = tmp_path / "scan.pcap"
+    scan_capture(capture_file)
+
+    assert cli.main(["watch", "--pcap", str(capture_file)]) == 0
+    out = capsys.readouterr().out
+    assert "[!] 192.168.1.66 (de:ad:be:ef:00:01) scanned 15 ports on 192.168.1.50" in out
+    assert "Done. 0 ARP packet(s), 100 TCP SYN(s), 1 alert(s)." in out
+
+
+def test_allowed_scanner_is_quiet(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = tmp_path / "netguard.toml"
+    config.write_text('[portscan]\nallow = ["192.168.1.66"]\n')
+    capture_file = tmp_path / "scan.pcap"
+    scan_capture(capture_file)
+
+    assert cli.main(["--config", str(config), "watch", "--pcap", str(capture_file)]) == 0
+    assert "100 TCP SYN(s), 0 alert(s)" in capsys.readouterr().out
+
+
+def test_capture_filter_compiles():
+    from scapy.arch.common import compile_filter
+    from scapy.error import Scapy_Exception
+
+    from netguard.sensor.sniffer import CAPTURE_FILTER
+
+    try:
+        program = compile_filter(CAPTURE_FILTER, linktype=1)  # 1 = Ethernet
+    except Scapy_Exception as exc:
+        pytest.skip(f"no libpcap/tcpdump to compile filters: {exc}")
+    assert program.bf_len > 0
