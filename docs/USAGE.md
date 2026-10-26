@@ -16,7 +16,7 @@ Use it only on networks you own or look after.
 | Catch someone port-scanning your machine | `netguard watch` |
 | Check your router and devices for risky open services | `netguard audit --report audit.html` |
 | Analyse a capture file from Wireshark or tcpdump | `netguard watch --pcap file.pcap` |
-| See everything in the browser | `netguard web` |
+| Use NetGuard with buttons instead of commands | `netguard gui` |
 | Show NetGuard to someone without a network | `netguard demo` |
 | Keep it running after a reboot | the systemd services in `packaging/systemd/` |
 | Feed alerts into another tool (jq, Splunk, ELK) | `~/.local/share/netguard/events.jsonl` |
@@ -82,6 +82,10 @@ netguard devices --untrusted        # what is left: devices you have not checked
 
 `(randomised MAC)` in the vendor column is normal for phones and laptops. They
 make up a new MAC address for each Wi-Fi network for privacy.
+
+The HOSTNAME column shows names NetGuard found by asking the devices (for
+example `Living-Room-TV` or `DESKTOP-7Q2K`). Many Android phones do not answer,
+so their column stays empty: give them a label yourself.
 
 ## 3. Everyday tasks
 
@@ -167,16 +171,25 @@ netguard watch --pcap capture.pcap --gateway 192.168.1.1
 
 This needs no root and saves nothing. It is useful to check a recording later.
 
-### "Show me everything in the browser"
+### "I prefer buttons to commands"
 
 ```bash
-netguard web
+netguard gui
 ```
 
-Open <http://127.0.0.1:8080/>. The dashboard shows how many devices are
-online, alerts from the last 24 hours, the device list, the timeline and the
-latest audit. It refreshes itself every 30 seconds. It only works on this
-computer: there is no login, so it never listens on the network.
+Your browser opens <http://127.0.0.1:8080/>. From there you can:
+
+- press **Scan now** on the overview,
+- name devices and press **Trust** on the Devices page,
+- press **Run audit now** on the Audit page.
+
+The overview shows how many devices are online, alerts from the last 24
+hours and recent activity, and refreshes itself every 30 seconds. The GUI only
+works on this computer: there is no login, so it never listens on the network.
+
+For a full scan from the GUI, start it with `sudo .venv/bin/netguard gui`;
+without root, **Scan now** reads the list of devices your computer talked to
+recently instead.
 
 ### "I want the alerts in another tool"
 

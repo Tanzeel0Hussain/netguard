@@ -35,12 +35,20 @@ covers what NetGuard can do, how to do each task, and what every alert means.
 | Device audit: open ports, banners, risky services, Markdown/HTML report | ✅ M6 |
 | Local web dashboard and JSON API | ✅ M7 |
 | systemd services, demo data, screenshots, v0.1.0 | ✅ M8 |
+| Browser GUI: scan, audit, trust and name devices (`netguard gui`) | ✅ |
+| Device names from reverse DNS, mDNS and NetBIOS | ✅ |
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the full plan.
 
 ## Install
 
 Requires Linux and Python 3.11+.
+
+**From a release:** download the `.whl` file from the
+[Releases page](https://github.com/Tanzeel0Hussain/netguard/releases) and run
+`pip install "netguard-0.1.0-py3-none-any.whl[web]"`.
+
+**From source:**
 
 ```bash
 git clone https://github.com/Tanzeel0Hussain/netguard.git
@@ -81,8 +89,8 @@ sudo .venv/bin/netguard watch
 .venv/bin/netguard audit --report audit.html
 .venv/bin/netguard audit --target 192.168.100.1 --ports 1-1024
 
-# Dashboard on http://127.0.0.1:8080/ (devices, timeline, latest audit)
-.venv/bin/netguard web
+# The GUI: opens http://127.0.0.1:8080/ in your browser
+.venv/bin/netguard gui
 
 # Optional: download the MAC vendor list once (resumes if the connection drops)
 .venv/bin/netguard oui update
@@ -203,18 +211,37 @@ IP             PORT  SERVICE  BANNER
   and every audit is saved to the database and noted on the timeline.
 - UDP services (e.g. UPnP/SSDP on 1900, DNS over UDP) are not checked.
 
-### Dashboard
+### GUI (dashboard)
 
-`netguard web` serves a read-only dashboard on `http://127.0.0.1:8080/` with
-an overview, the device list, the timeline and the latest audit, plus a JSON
-API (`/api/devices`, `/api/alerts`, `/api/timeline`, `/api/audit`). Pages
-refresh every 30 seconds and need no JavaScript.
+`netguard gui` opens the dashboard in your browser; `netguard web` serves it
+without opening a browser (for the systemd service). It shows an overview,
+the device list, the timeline and the latest audit, and lets you:
 
-It has no login, so it refuses to listen on anything but a loopback address.
-It also rejects requests whose `Host` header is not `localhost` or a loopback
-IP, which stops DNS-rebinding attacks from web pages you visit. Text that comes
-from the network (banners, names) is escaped, and responses carry a strict
-Content-Security-Policy.
+- **Scan now:** an active ARP scan when it runs as root, otherwise the kernel
+  ARP cache;
+- **Run audit now** on every online device;
+- **Trust / Untrust** a device and give it a name.
+
+There is also a JSON API (`/api/devices`, `/api/alerts`, `/api/timeline`,
+`/api/audit`). Pages need no JavaScript. `--read-only` hides the buttons.
+
+It has no login, so it refuses to listen on anything but a loopback address,
+and it guards against other web pages using it through your browser:
+
+- requests whose `Host` header is not `localhost` or a loopback IP are
+  rejected (DNS rebinding);
+- every form carries a secret token and posts from another origin are refused
+  (CSRF);
+- text that comes from the network (banners, names) is escaped, and responses
+  carry a strict Content-Security-Policy and may not be framed.
+
+### Device names
+
+After each scan NetGuard asks new devices for a name: reverse DNS first (many
+routers know DHCP names), then mDNS (Apple devices, printers, smart TVs, Linux)
+and NetBIOS (Windows). Each is one UDP packet with a one-second timeout and
+needs no root. Names show up in `netguard devices` and the GUI; `--no-names`
+skips the lookup. Devices that answer none of the three keep only their label.
 
 `--pcap` replays a capture (e.g. from `tcpdump -w`) through the same detector.
 It needs no root and writes nothing, which makes it handy for forensics.
@@ -296,7 +323,9 @@ src/netguard/
   alerting.py     console output, JSON-lines log and command hook
   sensor/         sniffer.py: live capture (ARP + TCP SYN) and pcap replay (Scapy)
   audit/          scanner.py (asyncio connect scan), rules.py, report.py
-  web/            Flask dashboard: templates/, static/
+  web/            Flask dashboard (GUI): templates/, static/
+  actions.py      scan and audit, shared by the CLI and the GUI
+  names.py        device names: reverse DNS, mDNS, NetBIOS
   demo.py         made-up data and attack captures for `netguard demo`
   oui.py          MAC vendor lookup and resumable download
   discovery/      arp_scan.py (active), arp_table.py (passive)

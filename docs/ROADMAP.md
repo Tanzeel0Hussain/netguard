@@ -91,5 +91,6 @@ Each milestone is one small, reviewable pull request with its own tests.
 - Rogue DHCP server detection (a second device handing out addresses).
 - UDP checks in the audit: UPnP/SSDP on 1900, open DNS resolvers, SNMP.
 - Detect slow port scans with longer-term statistics per source.
-- Login for the dashboard, so it can safely be opened from a phone.
+- Login for the dashboard, so it can safely be opened from a phone (the GUI
+  is local only for now).
 - Alerts to Telegram or e-mail, not only the desktop.

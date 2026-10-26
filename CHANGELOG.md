@@ -16,5 +16,8 @@ First release.
 - **Port-scan detection:** vertical scans and horizontal sweeps from TCP SYNs.
 - **Device audit:** TCP connect scan of inventory devices, banners, risk rules
   with advice, Markdown and HTML reports.
-- **Dashboard:** `netguard web`, read-only and local only, JSON API.
-- **Operations:** systemd services, `netguard demo`, usage guide.
+- **GUI:** `netguard gui` opens the dashboard in the browser: scan, run an
+  audit, trust and name devices; CSRF and DNS-rebinding protection, JSON API.
+- **Device names** from reverse DNS, mDNS and NetBIOS.
+- **Operations:** systemd services, `netguard demo`, usage guide, releases
+  built and published from tags.
