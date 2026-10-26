@@ -1,13 +1,15 @@
 """Work out which network to watch, and refuse targets that are not ours.
 
 The default interface, its subnet and the gateway are read from
-/proc/net/route, so no extra tools or root access are needed.
+/proc/net/route, so no extra tools or root access are needed. The Wi-Fi access
+point (BSSID) comes from `iw` or `nmcli` when they are installed.
 """
 
 from __future__ import annotations
 
 import ipaddress
 import struct
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -96,3 +98,51 @@ def validate_scan_target(network: ipaddress.IPv4Network) -> None:
             f"{network} has {network.num_addresses} addresses; the limit is "
             f"{MAX_SCAN_ADDRESSES} (a /20). Pass a smaller subnet."
         )
+
+
+SYS_NET = Path("/sys/class/net")
+
+
+def own_macs(sys_net: Path = SYS_NET) -> set[str]:
+    """MAC addresses of this machine's interfaces, so we never flag ourselves."""
+    macs = set()
+    for address in sys_net.glob("*/address"):
+        mac = address.read_text().strip().lower()
+        if mac and mac != "00:00:00:00:00:00":
+            macs.add(mac)
+    return macs
+
+
+def parse_iw_link(text: str) -> str | None:
+    # "Connected to 8c:6d:77:aa:bb:cc (on wlan0)" or "Not connected."
+    for line in text.splitlines():
+        if line.startswith("Connected to "):
+            return line.split()[2].lower()
+    return None
+
+
+def parse_nmcli_bssid(text: str) -> str | None:
+    # `nmcli -t -f ACTIVE,BSSID dev wifi list` escapes ":" in values as "\:".
+    for line in text.splitlines():
+        active, _, bssid = line.partition(":")
+        if active == "yes" and bssid:
+            return bssid.replace("\\:", ":").lower()
+    return None
+
+
+def current_bssid(iface: str, run=subprocess.run) -> str | None:
+    """The Wi-Fi access point `iface` is connected to, or None (wired / unknown)."""
+    commands = [
+        (["iw", "dev", iface, "link"], parse_iw_link),
+        (["nmcli", "-t", "-f", "ACTIVE,BSSID", "dev", "wifi", "list", "ifname", iface], parse_nmcli_bssid),
+    ]
+    for argv, parse in commands:
+        try:
+            done = run(argv, capture_output=True, text=True, timeout=5, check=False)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if done.returncode == 0:
+            bssid = parse(done.stdout)
+            if bssid:
+                return bssid
+    return None

@@ -41,14 +41,26 @@ def process_scan(
     # Only an active scan asks every address, so only it can tell that a device left.
     complete = source == "arp-scan"
     events = detect_presence_changes(devices, observations, now, away_after, complete)
-    alerts = [
-        alert
-        for alert in detect_new_devices(observations, {d.mac for d in devices}, baseline, now)
-        if not store.has_recent_alert(alert, since=now - dedup_window)
-    ]
+    alerts = detect_new_devices(observations, {d.mac for d in devices}, baseline, now)
 
     store.record_scan(observations, source=source, network=network, started_at=now)
     store.mark_absent(e.mac for e in events if e.kind == "left")
-    store.add_events(events)
-    store.add_alerts(alerts)
+    alerts = record_findings(store, alerts, events, now, dedup_window)
     return ScanResult(observations=observations, alerts=alerts, events=events, baseline=baseline)
+
+
+def record_findings(
+    store: Store,
+    alerts: Sequence[Alert],
+    events: Sequence[Event],
+    now: datetime,
+    dedup_window: timedelta,
+) -> list[Alert]:
+    """Save events and alerts, dropping alerts already raised within `dedup_window`.
+
+    Returns the alerts that were kept.
+    """
+    kept = [a for a in alerts if not store.has_recent_alert(a, since=now - dedup_window)]
+    store.add_events(events)
+    store.add_alerts(kept)
+    return kept

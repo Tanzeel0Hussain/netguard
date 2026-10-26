@@ -30,15 +30,18 @@ Each milestone is one small, reviewable pull request with its own tests.
 - Optional command hook per alert (`notify-send`), run as the real user under sudo.
 - Versioned SQLite migrations (schema v2), upgrading existing databases in place.
 
-## M4: ARP spoofing / MITM detection
+## M4: ARP spoofing / MITM detection ✅
 
-- Live sniffer (Scapy `AsyncSniffer`, filter `arp`) feeding detectors.
-- Alerts: known IP answered by a new MAC, gateway MAC changed, one MAC
-  claiming many IPs, burst of unsolicited (gratuitous) ARP replies.
-- Avoid a known false positive found in real testing: roaming to another
-  access point on the same subnet changes the gateway MAC. Remember the gateway
-  MAC per Wi-Fi network (SSID/BSSID) instead of globally.
-- Tests replay small pcap files in `tests/data/`.
+- `netguard watch`: live ARP capture with a kernel BPF filter; `--pcap` replays
+  a capture file offline.
+- Alerts: gateway MAC changed (critical), IP moved to another MAC, one MAC
+  claiming many IPs, flood of unsolicited ARP replies; each raised once per run.
+- Gateway MACs accepted per Wi-Fi access point (BSSID), so roaming between two
+  routers on one subnet is not an alert (the false positive found in M1
+  testing). `netguard gateway list|allow`.
+- Start-up check of the kernel ARP cache for an already poisoned gateway entry.
+- Schema v3: `gateway_macs` table.
+- Tests replay generated pcaps, including an arpspoof-style attack.
 
 ## M5: Port-scan detection
 

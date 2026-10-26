@@ -14,12 +14,21 @@ from pathlib import Path
 from netguard import __version__
 from netguard.alerting import Dispatcher
 from netguard.config import Config, load_config
+from netguard.detectors.arp_spoof import ArpFindings, ArpPacket, ArpWatch, ArpWatchSettings
 from netguard.discovery import ScanPermissionError, discover
-from netguard.engine import ScanResult, process_scan
-from netguard.models import is_randomized_mac, normalize_mac
-from netguard.netinfo import UnsafeTargetError, detect_netinfo, validate_scan_target
+from netguard.discovery.arp_table import read_arp_table
+from netguard.engine import ScanResult, process_scan, record_findings
+from netguard.models import is_randomized_mac, normalize_mac, utcnow
+from netguard.netinfo import (
+    UnsafeTargetError,
+    current_bssid,
+    detect_netinfo,
+    own_macs,
+    validate_scan_target,
+)
 from netguard.oui import MANUF_URL, VendorDB, download
 from netguard.monitor import run_monitor, stop_on_sigterm
+from netguard.sensor.arp_sniffer import capture_arp, open_capture, read_pcap
 from netguard.storage import Store
 
 VENDOR_WIDTH = 28
@@ -67,6 +76,22 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("--url", default=MANUF_URL, help="where to download it from")
     lookup = oui_sub.add_parser("lookup", help="show the vendor of a MAC address")
     lookup.add_argument("mac")
+
+    watch = sub.add_parser(
+        "watch", help="watch ARP traffic for spoofing / man-in-the-middle (Ctrl+C stops)"
+    )
+    watch.add_argument("--iface", help="network interface, e.g. wlan0")
+    watch.add_argument(
+        "--pcap", type=Path, help="analyse a capture file instead (no root; nothing is saved)"
+    )
+    watch.add_argument("--gateway", help="gateway IP (default: detected)")
+    watch.add_argument("--duration", type=float, help="stop after this many seconds")
+
+    gateway = sub.add_parser("gateway", help="gateway MACs accepted per Wi-Fi access point")
+    gateway_sub = gateway.add_subparsers(dest="gateway_command", required=True, metavar="ACTION")
+    gateway_sub.add_parser("list", help="show accepted gateway MACs")
+    allow = gateway_sub.add_parser("allow", help="accept a MAC as the gateway on the current network")
+    allow.add_argument("mac")
 
     alerts = sub.add_parser("alerts", help="show recent alerts")
     alerts.add_argument("--limit", type=int, default=20)
@@ -251,6 +276,105 @@ def cmd_alerts(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def cmd_watch(args: argparse.Namespace, config: Config) -> int:
+    settings = ArpWatchSettings(
+        window=timedelta(seconds=config.arp_window),
+        many_ips=config.arp_many_ips,
+        flood_replies=config.arp_flood_replies,
+    )
+    if args.pcap:
+        return _watch_pcap(args, config, settings)
+
+    info = detect_netinfo(iface=args.iface or config.iface)
+    sock = open_capture(info.iface)  # first, so a missing permission changes nothing
+    gateway = args.gateway or (str(info.gateway) if info.gateway else None)
+    bssid = current_bssid(info.iface) or "wired"
+    logging.basicConfig(format="netguard: %(levelname)s: %(message)s")
+    dispatcher = Dispatcher(config.log_path, config.alert_command)
+    dedup = timedelta(seconds=config.dedup_window)
+    counts = {"packets": 0, "alerts": 0}
+
+    with Store(config.db_path) as store:
+        watch = ArpWatch(
+            bindings={d.ip: d.mac for d in store.devices() if d.present},
+            gateway_ip=gateway,
+            gateway_macs=store.gateway_macs(bssid, gateway) if gateway else (),
+            own_macs=own_macs(),
+            settings=settings,
+        )
+
+        def handle(findings: ArpFindings) -> None:
+            for event in findings.events:
+                if event.kind == "gateway_learned":
+                    store.add_gateway_mac(bssid, event.ip, event.mac, event.created_at)
+            kept = record_findings(store, findings.alerts, findings.events, utcnow(), dedup)
+            counts["alerts"] += len(kept)
+            dispatcher.emit_all(kept, findings.events)
+
+        print(
+            f"Watching ARP on {info.iface} (gateway {gateway or 'unknown'}, "
+            f"access point {bssid}). Press Ctrl+C to stop."
+        )
+        # Check what this machine already believes: a poisoned cache shows up here first.
+        for obs in read_arp_table(info.iface):
+            if obs.ip == gateway:
+                handle(watch.check_binding(obs.ip, obs.mac, obs.seen_at, source="the kernel ARP cache"))
+
+        def on_packet(pkt: ArpPacket) -> None:
+            counts["packets"] += 1
+            handle(watch.feed(pkt))
+
+        stop = threading.Event()
+        stop_on_sigterm(stop)
+        if args.duration:
+            timer = threading.Timer(args.duration, stop.set)
+            timer.daemon = True
+            timer.start()
+        try:
+            capture_arp(sock, on_packet, stop)
+        except KeyboardInterrupt:
+            print()
+    print(f"Stopped. {counts['packets']} ARP packet(s), {counts['alerts']} alert(s).")
+    return 0
+
+
+def _watch_pcap(args: argparse.Namespace, config: Config, settings: ArpWatchSettings) -> int:
+    """Offline analysis: report what the capture shows, without touching the database."""
+    if not args.pcap.exists():
+        raise ValueError(f"{args.pcap} does not exist")
+    watch = ArpWatch(gateway_ip=args.gateway, own_macs=(), settings=settings)
+    dispatcher = Dispatcher()
+    print(f"Analysing {args.pcap} (gateway {args.gateway or 'not set: use --gateway'})...")
+    packets = alerts = 0
+    for pkt in read_pcap(args.pcap):
+        packets += 1
+        findings = watch.feed(pkt)
+        alerts += len(findings.alerts)
+        dispatcher.emit_all(findings.alerts, findings.events)
+    print(f"Done. {packets} ARP packet(s), {alerts} alert(s).")
+    return 0
+
+
+def cmd_gateway(args: argparse.Namespace, config: Config) -> int:
+    with Store(config.db_path) as store:
+        if args.gateway_command == "list":
+            rows = [[b, ip, mac, _when(at)] for b, ip, mac, at in store.all_gateway_macs()]
+            if not rows:
+                print("No gateway learned yet. Run `netguard watch`.")
+                return 0
+            print(_table(["ACCESS POINT", "GATEWAY", "MAC", "FIRST SEEN"], rows))
+            return 0
+
+        mac = normalize_mac(args.mac)
+        info = detect_netinfo(iface=config.iface)
+        if not info.gateway:
+            raise RuntimeError("no gateway on the current network")
+        bssid = current_bssid(info.iface) or "wired"
+        store.add_gateway_mac(bssid, str(info.gateway), mac, utcnow())
+    print(f"{mac} accepted as gateway {info.gateway} on access point {bssid}.")
+    return 0
+
+
 def cmd_timeline(args: argparse.Namespace, config: Config) -> int:
     mac = normalize_mac(args.mac) if args.mac else None
     with Store(config.db_path) as store:
@@ -274,6 +398,8 @@ COMMANDS = {
     "info": cmd_info,
     "scan": cmd_scan,
     "monitor": cmd_monitor,
+    "watch": cmd_watch,
+    "gateway": cmd_gateway,
     "timeline": cmd_timeline,
     "devices": cmd_devices,
     "trust": cmd_trust,
