@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -95,6 +96,11 @@ MIGRATIONS = [
         title    TEXT NOT NULL,
         detail   TEXT NOT NULL
     );
+    """,
+    # 5: device names found on the network
+    """
+    ALTER TABLE devices ADD COLUMN hostname TEXT;
+    ALTER TABLE devices ADD COLUMN hostname_source TEXT;
     """,
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
@@ -206,6 +212,14 @@ class Store:
             )
         return cursor.rowcount == 1
 
+    def set_hostnames(self, names: dict[str, tuple[str, str]]) -> None:
+        """names: MAC -> (hostname, source)."""
+        with self.conn:
+            self.conn.executemany(
+                "UPDATE devices SET hostname = ?, hostname_source = ? WHERE mac = ?",
+                [(name, source, mac) for mac, (name, source) in names.items()],
+            )
+
     def mark_absent(self, macs: Iterable[str]) -> None:
         with self.conn:
             self.conn.executemany(
@@ -306,6 +320,19 @@ class Store:
             for row in rows
         ]
 
+    def timeline(self, limit: int = 50, mac: str | None = None) -> list[TimelineEntry]:
+        """Events and alerts together, newest first."""
+        entries = [
+            TimelineEntry(e.created_at, e.kind, e.message, e.mac, e.ip, is_alert=False)
+            for e in self.events(limit=limit, mac=mac)
+        ] + [
+            TimelineEntry(a.created_at, a.severity, a.message, a.mac, a.ip, is_alert=True)
+            for a in self.alerts(limit=limit, mac=mac)
+        ]
+        # An alert goes above an event from the same moment.
+        entries.sort(key=lambda e: (e.at, e.is_alert), reverse=True)
+        return entries[:limit]
+
     # --- alerts ----------------------------------------------------------
 
     def has_recent_alert(self, alert: Alert, since: datetime) -> bool:
@@ -344,6 +371,16 @@ class Store:
         ]
 
 
+@dataclass(frozen=True)
+class TimelineEntry:
+    at: datetime
+    what: str  # event kind, or alert severity
+    message: str
+    mac: str | None
+    ip: str | None
+    is_alert: bool
+
+
 def _device(row: sqlite3.Row) -> Device:
     return Device(
         mac=row["mac"],
@@ -353,4 +390,6 @@ def _device(row: sqlite3.Row) -> Device:
         trusted=bool(row["trusted"]),
         label=row["label"],
         present=bool(row["present"]),
+        hostname=row["hostname"],
+        hostname_source=row["hostname_source"],
     )

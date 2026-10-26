@@ -1,0 +1,30 @@
+# The read-only dashboard on http://127.0.0.1:8080/. It needs no extra
+# capabilities. %i is your user name (see netguard-monitor@.service).
+#
+#   sudo cp netguard-web@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now netguard-web@$USER
+
+[Unit]
+Description=NetGuard dashboard (%i)
+After=network.target
+
+[Service]
+Type=simple
+User=%i
+ExecStart=/home/%i/netguard/.venv/bin/netguard web
+Restart=on-failure
+RestartSec=10
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

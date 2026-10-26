@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% from "_macros.html" import when %}
+{% block title %}Audit · NetGuard{% endblock %}
+{% block content %}
+<div class="title-row">
+  <h1>Latest audit</h1>
+  {% if not read_only %}
+  <form method="post" action="{{ url_for('run_audit') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Run audit now</button>
+  </form>
+  {% endif %}
+</div>
+<p class="hint">Checks every online device for 30 common ports and risky services. Takes a few seconds.</p>
+{% if audit %}
+<p class="hint">{{ when(audit.started_at) }} · {{ audit.hosts|length }} device(s) · {{ audit.ports_checked }} ports checked per device · {{ audit.open_ports|length }} open port(s)</p>
+
+<h2>Findings</h2>
+{% if audit.findings %}
+<div class="scroll">
+<table>
+  <thead><tr><th>Severity</th><th>Device</th><th>Port</th><th>Finding</th><th>Why / what to do</th></tr></thead>
+  <tbody>
+  {% for f in audit.findings %}
+    <tr>
+      <td><span class="badge {{ f.severity }}">{{ f.severity }}</span></td>
+      <td class="nowrap">{{ f.ip }}</td>
+      <td>{{ f.port or "" }}</td>
+      <td>{{ f.title }}</td>
+      <td>{{ f.detail }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">Nothing risky found on the ports that were checked.</p>
+{% endif %}
+
+<h2>Open ports</h2>
+{% if audit.open_ports %}
+<div class="scroll">
+<table>
+  <thead><tr><th>Device</th><th>Port</th><th>Banner</th></tr></thead>
+  <tbody>
+  {% for p in audit.open_ports|sort(attribute='port')|sort(attribute='ip') %}
+    <tr><td class="nowrap">{{ p.ip }}</td><td>{{ p.port }}{% if p.tls %} (TLS){% endif %}</td><td class="mono">{{ p.banner }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">No open ports found.</p>
+{% endif %}
+{% else %}
+<p class="empty">No audit yet.{% if read_only %} Run <code>netguard audit</code>.{% endif %}</p>
+{% endif %}
+{% endblock %}

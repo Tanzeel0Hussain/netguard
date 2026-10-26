@@ -1,6 +1,6 @@
 import pytest
 
-from netguard import cli
+from netguard import actions, cli
 from tests.conftest import obs
 
 PHONE = "aa:aa:aa:aa:aa:01"
@@ -13,7 +13,8 @@ def run(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))  # never read the real config file
     db = tmp_path / "netguard.db"
     found = []
-    monkeypatch.setattr(cli, "discover", lambda *a, **kw: list(found))
+    monkeypatch.setattr(actions, "discover", lambda *a, **kw: list(found))
+    monkeypatch.setattr(actions, "find_names", lambda ips: {})  # no real name lookups in tests
 
     def _run(*args):
         code = cli.main(["--db", str(db), *args])

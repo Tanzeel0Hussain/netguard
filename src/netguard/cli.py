@@ -3,37 +3,31 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import ipaddress
 import logging
 import sys
 import threading
+import webbrowser
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from netguard import __version__
+from netguard import __version__, actions
 from netguard.alerting import Dispatcher
-from netguard.audit.report import AuditedHost, AuditResult, to_html, to_markdown
-from netguard.audit.rules import assess, service_name
-from netguard.audit.scanner import COMMON_PORTS, scan_hosts
+from netguard.audit.report import to_html, to_markdown
+from netguard.audit.rules import service_name
+from netguard.audit.scanner import COMMON_PORTS
 from netguard.config import Config, load_config
 from netguard.detectors.arp_spoof import ArpFindings, ArpWatch, ArpWatchSettings
 from netguard.detectors.portscan import PortScanSettings, PortScanWatch, TcpSyn
-from netguard.discovery import ScanPermissionError, discover
+from netguard.discovery import ScanPermissionError
 from netguard.discovery.arp_table import read_arp_table
-from netguard.engine import ScanResult, process_scan, record_findings
-from netguard.models import Event, is_randomized_mac, normalize_mac, utcnow
-from netguard.netinfo import (
-    UnsafeTargetError,
-    current_bssid,
-    detect_netinfo,
-    own_macs,
-    validate_scan_target,
-)
-from netguard.oui import MANUF_URL, VendorDB, download
+from netguard.engine import ScanResult, record_findings
+from netguard.models import is_randomized_mac, normalize_mac, utcnow
 from netguard.monitor import run_monitor, stop_on_sigterm
+from netguard.netinfo import UnsafeTargetError, current_bssid, detect_netinfo, own_macs
+from netguard.oui import MANUF_URL, VendorDB, download
 from netguard.sensor.sniffer import capture, open_capture, read_pcap
 from netguard.storage import Store
 
@@ -110,6 +104,18 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--timeout", type=float, default=1.0, help="seconds per connection")
     audit.add_argument("--concurrency", type=int, default=100, help="connections open at once")
 
+    for name, help_text in (
+        ("gui", "open the dashboard in your browser (scan, audit and name devices from there)"),
+        ("web", "serve the dashboard without opening a browser (e.g. as a service)"),
+    ):
+        web = sub.add_parser(name, help=help_text)
+        web.add_argument("--host", default="127.0.0.1", help="loopback address to listen on")
+        web.add_argument("--port", type=int, default=8080)
+        web.add_argument("--read-only", action="store_true", help="hide the buttons; only show data")
+
+    demo = sub.add_parser("demo", help="create made-up data and attack captures to try NetGuard")
+    demo.add_argument("folder", nargs="?", type=Path, default=Path("netguard-demo"))
+
     alerts = sub.add_parser("alerts", help="show recent alerts")
     alerts.add_argument("--limit", type=int, default=20)
 
@@ -128,6 +134,9 @@ def _add_target_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--network", help="subnet to scan, e.g. 192.168.1.0/24")
     parser.add_argument("--iface", help="network interface, e.g. wlan0")
     parser.add_argument("--timeout", type=float, help="seconds to wait for ARP replies")
+    parser.add_argument(
+        "--no-names", action="store_true", help="do not look up device names (DNS, mDNS, NetBIOS)"
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -155,8 +164,7 @@ def cmd_info(args: argparse.Namespace, config: Config) -> int:
 
 
 def cmd_scan(args: argparse.Namespace, config: Config) -> int:
-    network, iface = _resolve_target(args, config)
-    validate_scan_target(network)
+    network, iface = actions.resolve_target(config, args.iface, args.network)
     print(f"Scanning {network} on {iface or 'default interface'} ({_mode(args)})...")
 
     vendors = VendorDB.load(config.oui_path)
@@ -180,8 +188,7 @@ def cmd_scan(args: argparse.Namespace, config: Config) -> int:
 
 
 def cmd_monitor(args: argparse.Namespace, config: Config) -> int:
-    network, iface = _resolve_target(args, config)
-    validate_scan_target(network)
+    network, iface = actions.resolve_target(config, args.iface, args.network)
     interval = args.interval if args.interval is not None else config.monitor_interval
     if interval < MIN_INTERVAL:
         raise ValueError(f"--interval must be at least {MIN_INTERVAL} seconds")
@@ -236,12 +243,13 @@ def cmd_devices(args: argparse.Namespace, config: Config) -> int:
             _trust_word(d.trusted),
             "online" if d.present else "away",
             d.label or "",
+            d.hostname or "",
             _when(d.first_seen),
             _when(d.last_seen),
         ]
         for d in devices
     ]
-    headers = ["IP", "MAC", "VENDOR", "STATUS", "PRESENCE", "LABEL", "FIRST SEEN", "LAST SEEN"]
+    headers = ["IP", "MAC", "VENDOR", "STATUS", "PRESENCE", "LABEL", "HOSTNAME", "FIRST SEEN", "LAST SEEN"]
     print(_table(headers, rows))
     _vendor_hint(vendors)
     return 0
@@ -426,36 +434,14 @@ def cmd_audit(args: argparse.Namespace, config: Config) -> int:
     if args.report and args.report.suffix.lower() not in (".md", ".html"):
         raise ValueError("--report must end in .md or .html")
 
-    vendors = VendorDB.load(config.oui_path)
     with Store(config.db_path) as store:
-        devices = _audit_targets(store, args.target)
-        hosts = [
-            AuditedHost(d.ip, d.mac, d.label or vendors.lookup(d.mac) or "") for d in devices
-        ]
-        try:
-            gateway = detect_netinfo(iface=config.iface).gateway
-        except (OSError, RuntimeError):
-            gateway = None
-
-        print(f"Auditing {len(hosts)} device(s), {len(ports)} port(s) each...", flush=True)
-        started = utcnow()
-        open_ports = asyncio.run(
-            scan_hosts([h.ip for h in hosts], ports, timeout=args.timeout, concurrency=args.concurrency)
-        )
-        result = AuditResult(
-            started_at=started,
-            hosts=hosts,
-            ports_checked=len(ports),
-            open_ports=open_ports,
-            findings=assess(open_ports, gateway_ip=str(gateway) if gateway else None),
-        )
-        store.save_audit(result)
-        counts = result.counts()
-        summary = ", ".join(f"{counts[s]} {s}" for s in ("high", "medium", "low") if counts[s])
-        store.add_events(
-            [Event("audit", f"Audited {len(hosts)} device(s): {summary or 'no findings'}", started)]
+        devices = actions.audit_targets(store, args.target)
+        print(f"Auditing {len(devices)} device(s), {len(ports)} port(s) each...", flush=True)
+        result = actions.audit(
+            config, store, devices, ports, timeout=args.timeout, concurrency=args.concurrency
         )
 
+    open_ports = result.open_ports
     if open_ports:
         rows = [
             [p.ip, str(p.port), service_name(p.port) + (" (TLS)" if p.tls else ""), p.banner[:60]]
@@ -466,7 +452,7 @@ def cmd_audit(args: argparse.Namespace, config: Config) -> int:
         print("No open ports found.")
     for f in result.findings:
         print(f"[{f.severity.upper()}] {f.ip}:{f.port or ''} {f.title}")
-    print(f"\n{len(open_ports)} open port(s), {summary or 'no findings'}.")
+    print(f"\n{len(open_ports)} open port(s), {actions.summary(result)}.")
 
     if args.report:
         text = to_html(result) if args.report.suffix.lower() == ".html" else to_markdown(result)
@@ -495,48 +481,48 @@ def parse_ports(spec: str) -> list[int]:
     return sorted(ports)
 
 
-def _audit_targets(store: Store, targets: list[str] | None) -> list:
-    """Devices to audit. Only devices in the inventory: this is for your own network."""
-    devices = store.devices()
-    if not targets:
-        chosen = [d for d in devices if d.present]
-        if not chosen:
-            raise RuntimeError("no online devices in the inventory; run `netguard scan` first")
-        return sorted(chosen, key=lambda d: ipaddress.ip_address(d.ip))
+def cmd_web(args: argparse.Namespace, config: Config) -> int:
+    try:
+        from netguard.web import create_app, is_loopback
+    except ImportError:
+        raise RuntimeError('the dashboard needs Flask: pip install -e ".[web]"') from None
+    if not is_loopback(args.host):
+        # The dashboard has no login: anyone who can reach it sees your network.
+        raise ValueError(f"{args.host} is not a loopback address; the dashboard only runs on 127.0.0.1")
 
-    by_ip = {d.ip: d for d in devices}
-    by_mac = {d.mac: d for d in devices}
-    chosen = []
-    for target in targets:
-        try:
-            device = by_mac.get(normalize_mac(target))
-        except ValueError:
-            device = by_ip.get(target)
-        if device is None:
-            raise ValueError(
-                f"{target} is not in the inventory. NetGuard only audits devices it has "
-                "discovered on your network; run `netguard scan` first."
-            )
-        validate_scan_target(ipaddress.ip_network(device.ip))
-        chosen.append(device)
-    return chosen
+    app = create_app(config, read_only=args.read_only)
+    host = f"[{args.host}]" if ":" in args.host else args.host
+    url = f"http://{host}:{args.port}/"
+    print(f"NetGuard dashboard on {url} (Ctrl+C to stop)")
+    if args.command == "gui":
+        # Open the browser once the server is listening.
+        threading.Timer(1.0, webbrowser.open, args=(url,)).start()
+    from werkzeug.serving import run_simple
+
+    run_simple(args.host, args.port, app, threaded=True)
+    return 0
+
+
+def cmd_demo(args: argparse.Namespace, config: Config) -> int:
+    from netguard.demo import GATEWAY_IP, build_demo
+
+    paths = build_demo(args.folder)
+    print(f"Demo data written to {args.folder}/. Try:\n")
+    print(f"  netguard --db {paths['db']} web")
+    print(f"  netguard --db {paths['db']} timeline")
+    print(f"  netguard watch --pcap {paths['arp_pcap']} --gateway {GATEWAY_IP}")
+    print(f"  netguard watch --pcap {paths['scan_pcap']}")
+    return 0
 
 
 def cmd_timeline(args: argparse.Namespace, config: Config) -> int:
     mac = normalize_mac(args.mac) if args.mac else None
     with Store(config.db_path) as store:
-        # The middle value puts an alert above an event from the same moment.
-        entries = [
-            (e.created_at, 0, e.kind, e.message) for e in store.events(limit=args.limit, mac=mac)
-        ] + [
-            (a.created_at, 1, a.severity.upper(), a.message)
-            for a in store.alerts(limit=args.limit, mac=mac)
-        ]
+        entries = store.timeline(limit=args.limit, mac=mac)
     if not entries:
         print("Nothing on the timeline yet. Run `netguard scan` or `netguard monitor`.")
         return 0
-    entries.sort(key=lambda entry: entry[:2], reverse=True)
-    rows = [[_when(at), kind, message] for at, _, kind, message in entries[: args.limit]]
+    rows = [[_when(e.at), e.what.upper() if e.is_alert else e.what, e.message] for e in entries]
     print(_table(["TIME", "WHAT", "DETAILS"], rows))
     return 0
 
@@ -548,6 +534,9 @@ COMMANDS = {
     "watch": cmd_watch,
     "gateway": cmd_gateway,
     "audit": cmd_audit,
+    "web": cmd_web,
+    "gui": cmd_web,
+    "demo": cmd_demo,
     "timeline": cmd_timeline,
     "devices": cmd_devices,
     "trust": cmd_trust,
@@ -573,34 +562,13 @@ def _scan_once(
     network: ipaddress.IPv4Network,
     iface: str | None,
 ) -> ScanResult:
-    timeout = args.timeout if args.timeout is not None else config.scan_timeout
-    observations = discover(network, iface=iface, passive=args.passive, timeout=timeout)
-    return process_scan(
-        store,
-        observations,
-        source="arp-table" if args.passive else "arp-scan",
-        network=str(network),
-        away_after=timedelta(seconds=config.away_after),
-        dedup_window=timedelta(seconds=config.dedup_window),
+    return actions.scan(
+        config, store, network, iface, args.passive, timeout=args.timeout, names=not args.no_names
     )
 
 
 def _mode(args: argparse.Namespace) -> str:
     return "kernel ARP cache" if args.passive else "active ARP scan"
-
-
-def _resolve_target(
-    args: argparse.Namespace, config: Config
-) -> tuple[ipaddress.IPv4Network, str | None]:
-    iface = args.iface or config.iface
-    cidr = args.network or config.network
-    if cidr:
-        network = ipaddress.ip_network(cidr, strict=False)
-        if not isinstance(network, ipaddress.IPv4Network):
-            raise ValueError("only IPv4 networks are supported (ARP is IPv4-only)")
-        return network, iface
-    info = detect_netinfo(iface=iface)
-    return info.network, info.iface
 
 
 def _set_trust(config: Config, mac: str, trusted: bool, label: str | None) -> int:

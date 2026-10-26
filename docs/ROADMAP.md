@@ -66,12 +66,31 @@ Each milestone is one small, reviewable pull request with its own tests.
 - Markdown and HTML reports (banners are escaped: a device cannot inject into
   the report), saved to the database (schema v4) and the timeline.
 
-## M7: Web dashboard
+## M7: Web dashboard ✅
 
-- Flask app bound to 127.0.0.1: devices, alerts, timeline.
-- Read-only, JSON API underneath (`/api/devices`, `/api/alerts`).
+- `netguard web`: Flask, read-only, loopback only; overview, devices,
+  timeline, latest audit; JSON API.
+- Host header check against DNS rebinding, CSP and other security headers,
+  escaped output.
+- Light and dark mode, works on a phone, no JavaScript.
 
-## M8: Polish and release
+## M8: Polish and release ✅
 
-- systemd unit for running the monitor at boot.
-- Screenshots, demo pcaps, docs; tag `v0.1.0`.
+- systemd services for `monitor`, `watch` and `web`, running as the user with
+  only `CAP_NET_RAW`/`CAP_NET_ADMIN` and a read-only sandbox.
+- `netguard demo`: made-up data and two attack captures, to try NetGuard
+  without a network.
+- Screenshots, step-by-step guide (`docs/USAGE.md`), changelog; `v0.1.0`.
+- Found while building the demo: `watch --pcap` saw no packets outside the
+  test suite; fixed, with tests that run the command in a fresh process.
+
+## Ideas after v0.1
+
+- IPv6: neighbour discovery spoofing (the IPv6 version of ARP spoofing) and
+  scans over IPv6.
+- Rogue DHCP server detection (a second device handing out addresses).
+- UDP checks in the audit: UPnP/SSDP on 1900, open DNS resolvers, SNMP.
+- Detect slow port scans with longer-term statistics per source.
+- Login for the dashboard, so it can safely be opened from a phone (the GUI
+  is local only for now).
+- Alerts to Telegram or e-mail, not only the desktop.

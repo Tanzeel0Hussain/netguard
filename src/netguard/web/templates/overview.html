@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% from "_macros.html" import timeline_table, when %}
+{% block content %}
+<div class="title-row">
+  <h1>Overview</h1>
+  {% if not read_only %}
+  <form method="post" action="{{ url_for('scan') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Scan now</button>
+  </form>
+  {% endif %}
+</div>
+<section class="tiles">
+  <a class="tile" href="{{ url_for('devices') }}">
+    <span class="value">{{ online }}<small> / {{ total }}</small></span>
+    <span class="label">devices online</span>
+  </a>
+  <a class="tile{% if untrusted %} warn{% endif %}" href="{{ url_for('devices') }}">
+    <span class="value">{{ untrusted }}</span>
+    <span class="label">not marked as trusted</span>
+  </a>
+  <a class="tile{% if critical_today %} bad{% elif alerts_today %} warn{% endif %}" href="{{ url_for('timeline') }}">
+    <span class="value">{{ alerts_today }}</span>
+    <span class="label">alerts in the last 24 h{% if critical_today %}, {{ critical_today }} critical{% endif %}</span>
+  </a>
+  <a class="tile{% if audit_counts['high'] %} bad{% elif audit_counts['medium'] %} warn{% endif %}" href="{{ url_for('audit') }}">
+    {% if audit %}
+    <span class="value">{{ audit.findings|length }}</span>
+    <span class="label">audit findings ({{ when(audit.started_at) }})</span>
+    {% else %}
+    <span class="value">–</span>
+    <span class="label">no audit yet</span>
+    {% endif %}
+  </a>
+</section>
+
+<h2>Latest activity</h2>
+{{ timeline_table(timeline) }}
+{% endblock %}

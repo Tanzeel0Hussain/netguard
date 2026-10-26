@@ -1,0 +1,24 @@
+{% macro when(dt) -%}
+{{ dt.astimezone().strftime('%Y-%m-%d %H:%M') }}
+{%- endmacro %}
+
+{% macro timeline_table(entries) -%}
+{% if entries %}
+<div class="scroll">
+<table>
+  <thead><tr><th>Time</th><th>What</th><th>Details</th></tr></thead>
+  <tbody>
+  {% for e in entries %}
+    <tr>
+      <td class="nowrap">{{ when(e.at) }}</td>
+      <td>{% if e.is_alert %}<span class="badge {{ e.what }}">{{ e.what }}</span>{% else %}<span class="event">{{ e.what }}</span>{% endif %}</td>
+      <td>{{ e.message }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">Nothing yet. Run <code>netguard scan</code> or <code>netguard monitor</code>.</p>
+{% endif %}
+{%- endmacro %}
