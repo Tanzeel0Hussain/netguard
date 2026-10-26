@@ -1,0 +1,11 @@
+# Copy to ~/.config/netguard/netguard.toml and adjust. Every key is optional.
+
+[network]
+# iface = "wlan0"            # default: the interface with the default route
+# cidr = "192.168.1.0/24"    # default: that interface's subnet
+
+[storage]
+# db_path = "~/.local/share/netguard/netguard.db"
+
+[scan]
+# timeout = 2.0              # seconds to wait for ARP replies

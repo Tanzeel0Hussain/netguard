@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "netguard"
+dynamic = ["version"]
+description = "Home network security monitor: device inventory, ARP spoofing and port-scan detection, and a local dashboard."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Tanzeel Hussain" }]
+keywords = ["network-security", "arp", "ids", "scapy", "blue-team", "home-network"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: System :: Networking :: Monitoring",
+    "Topic :: Security",
+]
+dependencies = ["scapy>=2.5"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+web = ["flask>=3"]
+
+[project.scripts]
+netguard = "netguard.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Tanzeel0Hussain/netguard"
+
+[tool.setuptools.dynamic]
+version = { attr = "netguard.__version__" }
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
