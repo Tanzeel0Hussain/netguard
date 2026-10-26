@@ -62,3 +62,13 @@ def test_detector_alerts_once_per_mac_even_with_two_ips():
     seen = [obs("192.168.1.66", STRANGER), obs("192.168.1.67", STRANGER)]
     alerts = detect_new_devices(seen, known_macs=set(), baseline=False, now=T0)
     assert len(alerts) == 1
+
+
+def test_gateway_macs_are_kept_per_access_point(store):
+    store.add_gateway_mac("8c:6d:77:00:00:ec", "192.168.1.1", "8c:6d:77:00:00:01", T0)
+    store.add_gateway_mac("8c:6d:77:00:00:ec", "192.168.1.1", "8c:6d:77:00:00:01", T0)  # no duplicate
+    store.add_gateway_mac("04:88:5f:00:00:ec", "192.168.1.1", "04:88:5f:00:00:01", T0)
+
+    assert store.gateway_macs("8c:6d:77:00:00:ec", "192.168.1.1") == {"8c:6d:77:00:00:01"}
+    assert store.gateway_macs("wired", "192.168.1.1") == set()
+    assert len(store.all_gateway_macs()) == 2

@@ -19,3 +19,8 @@
 # log_path = "~/.local/share/netguard/events.jsonl"   # JSON lines; "" turns it off
 # dedup_window = 3600        # drop a repeated alert within this many seconds
 # command = ["notify-send", "NetGuard"]   # run for each alert, message added last
+
+[arp]
+# window = 60                # seconds, for the two checks below
+# many_ips = 3               # alert when one MAC claims this many IPs in the window
+# flood_replies = 15         # alert on this many unsolicited ARP replies in the window

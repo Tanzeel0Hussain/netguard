@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 from netguard.config import hand_back_to_sudo_user
@@ -30,13 +31,16 @@ class Dispatcher:
         self.quiet = quiet
 
     def emit(self, result: ScanResult) -> None:
-        for event in result.events:
+        self.emit_all(result.alerts, result.events)
+
+    def emit_all(self, alerts: Sequence[Alert], events: Sequence[Event]) -> None:
+        for event in events:
             # New devices are already on screen (scan table or a new_device
             # alert), so "first_seen" only goes to the log.
             if event.kind != "first_seen":
                 self._print(f"[i] {event.message}")
             self._log(_event_record(event))
-        for alert in result.alerts:
+        for alert in alerts:
             self._print(f"[!] {alert.message}")
             self._log(_alert_record(alert))
             if self.command:

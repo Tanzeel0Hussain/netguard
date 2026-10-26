@@ -20,7 +20,7 @@ all on a local web dashboard.
 | Alert when an unknown device joins | ✅ v0.1 |
 | MAC vendor lookup, randomised-MAC detection, device labels | ✅ M2 |
 | Continuous monitoring, presence timeline, JSON-lines log, notify hook | ✅ M3 |
-| ARP spoofing / MITM detection | 🔜 M4 |
+| ARP spoofing / MITM detection (live or from a pcap) | ✅ M4 |
 | Port-scan detection | 🔜 M5 |
 | Device audit report (open ports, risky services) | 🔜 M6 |
 | Web dashboard | 🔜 M7 |
@@ -61,6 +61,11 @@ sudo .venv/bin/netguard scan
 sudo .venv/bin/netguard monitor --interval 300
 .venv/bin/netguard timeline
 
+# Watch ARP traffic for spoofing / man-in-the-middle
+sudo .venv/bin/netguard watch
+.venv/bin/netguard watch --pcap capture.pcap --gateway 192.168.1.1   # offline, no root
+.venv/bin/netguard gateway list
+
 # Optional: download the MAC vendor list once (resumes if the connection drops)
 .venv/bin/netguard oui update
 .venv/bin/netguard oui lookup 8c:6d:77:ab:cd:01
@@ -99,6 +104,38 @@ and the monitor carries on.
 - The same alert for the same device is not repeated within `dedup_window`.
 - Set `[alerts] command = ["notify-send", "NetGuard"]` to get a desktop
   notification per alert. Under sudo the command runs as you, not as root.
+
+### ARP spoofing detection
+
+ARP has no authentication: any host can answer "the gateway is at my MAC",
+and victims then send their traffic through it (man-in-the-middle).
+`netguard watch` captures ARP packets and raises:
+
+| Alert | Severity | Meaning |
+|---|---|---|
+| `gateway_mac_changed` | critical | The gateway IP is claimed by a MAC not accepted for this access point |
+| `ip_mac_changed` | warning | An IP that belonged to one device is claimed by another |
+| `mac_claims_many_ips` | warning | One MAC answers for several IPs within a minute |
+| `arp_reply_flood` | warning | One MAC keeps sending ARP replies nobody asked for (how `arpspoof` keeps a cache poisoned) |
+
+At start-up it also checks the gateway entry already in the kernel's ARP cache,
+so a cache that was poisoned before NetGuard started is caught too.
+
+**Roaming without false alarms.** Homes with two routers or mesh access points
+share one gateway IP across different MACs. The accepted gateway MACs are
+stored per Wi-Fi access point (BSSID, read with `iw` or `nmcli`), so moving to
+another floor is not an attack. The first MAC seen as the gateway on a new
+access point is learned (trust on first use, like SSH's `known_hosts`); use
+`netguard gateway allow <mac>` to accept another one.
+
+**What one sensor can see.** On Wi-Fi and switched networks, ARP replies are
+unicast. A laptop running NetGuard sees broadcasts, gratuitous ARP and the
+replies sent to itself, so it reliably detects attacks against itself and
+broadcast poisoning, but not an attack between two other devices. Run it on an
+always-on machine, or use a mirror port, to watch more.
+
+`--pcap` replays a capture (e.g. from `tcpdump -w`) through the same detector.
+It needs no root and writes nothing, which makes it handy for forensics.
 
 ### Configuration
 
@@ -144,9 +181,10 @@ src/netguard/
   engine.py       runs detectors on a scan and saves the results
   monitor.py      the scan loop behind `netguard monitor`
   alerting.py     console output, JSON-lines log and command hook
+  sensor/         arp_sniffer.py: live ARP capture and pcap replay (Scapy)
   oui.py          MAC vendor lookup and resumable download
   discovery/      arp_scan.py (active), arp_table.py (passive)
-  detectors/      new_device.py, presence.py (more coming)
+  detectors/      new_device.py, presence.py, arp_spoof.py
 tests/            pytest suite, no root or network needed
 ```
 

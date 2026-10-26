@@ -62,6 +62,9 @@ class Config:
     away_after: float = 900  # seconds unseen before a device counts as gone
     dedup_window: float = 3600  # seconds during which a repeated alert is dropped
     alert_command: list[str] | None = None  # e.g. ["notify-send", "NetGuard"]
+    arp_window: float = 60  # seconds, for the many-IPs and reply-flood checks
+    arp_many_ips: int = 3
+    arp_flood_replies: int = 15
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -78,6 +81,7 @@ def load_config(path: Path | None = None) -> Config:
     scan = data.get("scan", {})
     monitor = data.get("monitor", {})
     alerts = data.get("alerts", {})
+    arp = data.get("arp", {})
     config = Config(
         iface=network.get("iface"),
         network=network.get("cidr"),
@@ -86,6 +90,9 @@ def load_config(path: Path | None = None) -> Config:
         away_after=float(monitor.get("away_after", 900)),
         dedup_window=float(alerts.get("dedup_window", 3600)),
         alert_command=alerts.get("command"),
+        arp_window=float(arp.get("window", 60)),
+        arp_many_ips=int(arp.get("many_ips", 3)),
+        arp_flood_replies=int(arp.get("flood_replies", 15)),
     )
     if config.alert_command is not None and (
         not isinstance(config.alert_command, list)

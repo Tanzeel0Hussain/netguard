@@ -54,6 +54,16 @@ MIGRATIONS = [
     );
     CREATE INDEX events_created_at ON events (created_at);
     """,
+    # 3: gateway MACs accepted per Wi-Fi access point, for ARP spoofing detection
+    """
+    CREATE TABLE gateway_macs (
+        bssid      TEXT NOT NULL,  -- access point, or "wired"
+        gateway_ip TEXT NOT NULL,
+        mac        TEXT NOT NULL,
+        first_seen TEXT NOT NULL,
+        PRIMARY KEY (bssid, gateway_ip, mac)
+    );
+    """,
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 
@@ -169,6 +179,28 @@ class Store:
             self.conn.executemany(
                 "UPDATE devices SET present = 0 WHERE mac = ?", [(mac,) for mac in macs]
             )
+
+    # --- gateways --------------------------------------------------------
+
+    def gateway_macs(self, bssid: str, gateway_ip: str) -> set[str]:
+        rows = self.conn.execute(
+            "SELECT mac FROM gateway_macs WHERE bssid = ? AND gateway_ip = ?", (bssid, gateway_ip)
+        )
+        return {row["mac"] for row in rows}
+
+    def add_gateway_mac(self, bssid: str, gateway_ip: str, mac: str, at: datetime) -> None:
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO gateway_macs (bssid, gateway_ip, mac, first_seen) "
+                "VALUES (?, ?, ?, ?)",
+                (bssid, gateway_ip, mac, _ts(at)),
+            )
+
+    def all_gateway_macs(self) -> list[tuple[str, str, str, datetime]]:
+        rows = self.conn.execute(
+            "SELECT * FROM gateway_macs ORDER BY bssid, gateway_ip, first_seen"
+        )
+        return [(r["bssid"], r["gateway_ip"], r["mac"], _dt(r["first_seen"])) for r in rows]
 
     # --- events ----------------------------------------------------------
 
