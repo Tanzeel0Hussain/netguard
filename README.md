@@ -15,7 +15,9 @@ your own devices for risky open services. A local web dashboard shows it all.
 **New here? Read the step-by-step guide: [docs/USAGE.md](docs/USAGE.md).** It
 covers what NetGuard can do, how to do each task, and what every alert means.
 
-![Dashboard overview with an ARP spoofing alert and a port scan](docs/screenshots/overview.png)
+![GUI overview with an ARP spoofing alert and a port scan](docs/screenshots/overview.png)
+
+![Devices page: name devices and mark them as trusted](docs/screenshots/devices.png)
 
 ![Audit page with risky services and advice](docs/screenshots/audit.png)
 
