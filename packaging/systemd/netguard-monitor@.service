@@ -1,0 +1,40 @@
+# Scans the network every 5 minutes and reports devices joining and leaving.
+#
+# %i is your user name, and NetGuard is expected in ~/netguard with its
+# virtual environment in ~/netguard/.venv. Install and start it with:
+#
+#   sudo cp netguard-monitor@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now netguard-monitor@$USER
+#
+# Run `netguard scan --passive` once first, so the data folder exists.
+
+[Unit]
+Description=NetGuard network monitor (%i)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=%i
+ExecStart=/home/%i/netguard/.venv/bin/netguard monitor --interval 300
+Restart=on-failure
+RestartSec=30
+
+# Least privilege: no root, only the capabilities raw ARP packets need.
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=yes
+
+# Sandbox: the system and home folders are read-only, except NetGuard's data.
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/%i/.local/share/netguard
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_PACKET AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target
