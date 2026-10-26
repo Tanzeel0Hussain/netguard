@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="{{ refresh }}">
+<title>{% block title %}NetGuard{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header>
+  <a class="brand" href="{{ url_for('overview') }}">NetGuard</a>
+  <nav>
+    <a href="{{ url_for('overview') }}" {% if page == 'overview' %}aria-current="page"{% endif %}>Overview</a>
+    <a href="{{ url_for('devices') }}" {% if page == 'devices' %}aria-current="page"{% endif %}>Devices</a>
+    <a href="{{ url_for('timeline') }}" {% if page == 'timeline' %}aria-current="page"{% endif %}>Timeline</a>
+    <a href="{{ url_for('audit') }}" {% if page == 'audit' %}aria-current="page"{% endif %}>Audit</a>
+  </nav>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+<footer>NetGuard {{ version }} · read-only · refreshes every {{ refresh }} s</footer>
+</body>
+</html>

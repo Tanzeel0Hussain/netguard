@@ -110,6 +110,10 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--timeout", type=float, default=1.0, help="seconds per connection")
     audit.add_argument("--concurrency", type=int, default=100, help="connections open at once")
 
+    web = sub.add_parser("web", help="open the read-only dashboard in your browser")
+    web.add_argument("--host", default="127.0.0.1", help="loopback address to listen on")
+    web.add_argument("--port", type=int, default=8080)
+
     alerts = sub.add_parser("alerts", help="show recent alerts")
     alerts.add_argument("--limit", type=int, default=20)
 
@@ -522,21 +526,32 @@ def _audit_targets(store: Store, targets: list[str] | None) -> list:
     return chosen
 
 
+def cmd_web(args: argparse.Namespace, config: Config) -> int:
+    try:
+        from netguard.web import create_app, is_loopback
+    except ImportError:
+        raise RuntimeError('the dashboard needs Flask: pip install -e ".[web]"') from None
+    if not is_loopback(args.host):
+        # The dashboard has no login: anyone who can reach it sees your network.
+        raise ValueError(f"{args.host} is not a loopback address; the dashboard only runs on 127.0.0.1")
+
+    app = create_app(config.db_path, config.oui_path)
+    host = f"[{args.host}]" if ":" in args.host else args.host
+    print(f"NetGuard dashboard on http://{host}:{args.port}/ (Ctrl+C to stop)")
+    from werkzeug.serving import run_simple
+
+    run_simple(args.host, args.port, app, threaded=True)
+    return 0
+
+
 def cmd_timeline(args: argparse.Namespace, config: Config) -> int:
     mac = normalize_mac(args.mac) if args.mac else None
     with Store(config.db_path) as store:
-        # The middle value puts an alert above an event from the same moment.
-        entries = [
-            (e.created_at, 0, e.kind, e.message) for e in store.events(limit=args.limit, mac=mac)
-        ] + [
-            (a.created_at, 1, a.severity.upper(), a.message)
-            for a in store.alerts(limit=args.limit, mac=mac)
-        ]
+        entries = store.timeline(limit=args.limit, mac=mac)
     if not entries:
         print("Nothing on the timeline yet. Run `netguard scan` or `netguard monitor`.")
         return 0
-    entries.sort(key=lambda entry: entry[:2], reverse=True)
-    rows = [[_when(at), kind, message] for at, _, kind, message in entries[: args.limit]]
+    rows = [[_when(e.at), e.what.upper() if e.is_alert else e.what, e.message] for e in entries]
     print(_table(["TIME", "WHAT", "DETAILS"], rows))
     return 0
 
@@ -548,6 +563,7 @@ COMMANDS = {
     "watch": cmd_watch,
     "gateway": cmd_gateway,
     "audit": cmd_audit,
+    "web": cmd_web,
     "timeline": cmd_timeline,
     "devices": cmd_devices,
     "trust": cmd_trust,

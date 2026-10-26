@@ -66,10 +66,13 @@ Each milestone is one small, reviewable pull request with its own tests.
 - Markdown and HTML reports (banners are escaped: a device cannot inject into
   the report), saved to the database (schema v4) and the timeline.
 
-## M7: Web dashboard
+## M7: Web dashboard ✅
 
-- Flask app bound to 127.0.0.1: devices, alerts, timeline.
-- Read-only, JSON API underneath (`/api/devices`, `/api/alerts`).
+- `netguard web`: Flask, read-only, loopback only; overview, devices,
+  timeline, latest audit; JSON API.
+- Host header check against DNS rebinding, CSP and other security headers,
+  escaped output.
+- Light and dark mode, works on a phone, no JavaScript.
 
 ## M8: Polish and release
 

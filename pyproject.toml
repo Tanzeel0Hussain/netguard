@@ -20,7 +20,7 @@ classifiers = [
 dependencies = ["scapy>=2.5"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "flask>=3"]
 web = ["flask>=3"]
 
 [project.scripts]
@@ -28,6 +28,9 @@ netguard = "netguard.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Tanzeel0Hussain/netguard"
+
+[tool.setuptools.package-data]
+netguard = ["web/templates/*.html", "web/static/*.css"]
 
 [tool.setuptools.dynamic]
 version = { attr = "netguard.__version__" }

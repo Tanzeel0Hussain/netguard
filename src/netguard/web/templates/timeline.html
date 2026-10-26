@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% from "_macros.html" import timeline_table %}
+{% block title %}Timeline · NetGuard{% endblock %}
+{% block content %}
+<h1>Timeline</h1>
+<p class="hint">Alerts and events, newest first: devices joining, leaving and returning, attacks detected, audits run.</p>
+{{ timeline_table(entries) }}
+{% endblock %}

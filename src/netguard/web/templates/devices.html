@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% from "_macros.html" import when %}
+{% block title %}Devices · NetGuard{% endblock %}
+{% block content %}
+<h1>Devices</h1>
+{% if devices %}
+<div class="scroll">
+<table>
+  <thead>
+    <tr><th>IP</th><th>MAC</th><th>Vendor</th><th>Name</th><th>Trust</th><th>Presence</th><th>First seen</th><th>Last seen</th></tr>
+  </thead>
+  <tbody>
+  {% for d in devices %}
+    <tr>
+      <td class="nowrap">{{ d.ip }}</td>
+      <td class="nowrap mono">{{ d.mac }}</td>
+      <td>{{ vendor(d.mac) }}</td>
+      <td>{{ d.label or "" }}</td>
+      <td>{% if d.trusted %}<span class="badge ok">trusted</span>{% else %}<span class="badge warning">untrusted</span>{% endif %}</td>
+      <td>{% if d.present %}online{% else %}<span class="muted">away</span>{% endif %}</td>
+      <td class="nowrap">{{ when(d.first_seen) }}</td>
+      <td class="nowrap">{{ when(d.last_seen) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="hint">Mark a device you know with <code>netguard trust &lt;mac&gt; --label NAME</code>.</p>
+{% else %}
+<p class="empty">No devices yet. Run <code>sudo netguard scan</code>.</p>
+{% endif %}
+{% endblock %}

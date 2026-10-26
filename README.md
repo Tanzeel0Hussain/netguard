@@ -5,7 +5,7 @@
 NetGuard watches your own local network the way a small blue-team sensor would:
 it keeps an inventory of every device, warns you when an unknown device joins,
 detects ARP spoofing / man-in-the-middle attempts and port scans, and audits
-your own devices for risky open services. A local web dashboard is next.
+your own devices for risky open services. A local web dashboard shows it all.
 
 > **Scope:** NetGuard is a defensive tool for networks you own or administer.
 > It refuses to scan public IP ranges or networks larger than a /20.
@@ -25,7 +25,7 @@ covers what NetGuard can do, how to do each task, and what every alert means.
 | ARP spoofing / MITM detection (live or from a pcap) | ✅ M4 |
 | Port-scan and host-sweep detection | ✅ M5 |
 | Device audit: open ports, banners, risky services, Markdown/HTML report | ✅ M6 |
-| Web dashboard | 🔜 M7 |
+| Local web dashboard and JSON API | ✅ M7 |
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the full plan.
 
@@ -71,6 +71,9 @@ sudo .venv/bin/netguard watch
 # Audit your own devices for open ports and risky services (no root needed)
 .venv/bin/netguard audit --report audit.html
 .venv/bin/netguard audit --target 192.168.100.1 --ports 1-1024
+
+# Dashboard on http://127.0.0.1:8080/ (devices, timeline, latest audit)
+.venv/bin/netguard web
 
 # Optional: download the MAC vendor list once (resumes if the connection drops)
 .venv/bin/netguard oui update
@@ -191,6 +194,19 @@ IP             PORT  SERVICE  BANNER
   and every audit is saved to the database and noted on the timeline.
 - UDP services (e.g. UPnP/SSDP on 1900, DNS over UDP) are not checked.
 
+### Dashboard
+
+`netguard web` serves a read-only dashboard on `http://127.0.0.1:8080/` with
+an overview, the device list, the timeline and the latest audit, plus a JSON
+API (`/api/devices`, `/api/alerts`, `/api/timeline`, `/api/audit`). Pages
+refresh every 30 seconds and need no JavaScript.
+
+It has no login, so it refuses to listen on anything but a loopback address.
+It also rejects requests whose `Host` header is not `localhost` or a loopback
+IP, which stops DNS-rebinding attacks from web pages you visit. Text that comes
+from the network (banners, names) is escaped, and responses carry a strict
+Content-Security-Policy.
+
 `--pcap` replays a capture (e.g. from `tcpdump -w`) through the same detector.
 It needs no root and writes nothing, which makes it handy for forensics.
 
@@ -240,6 +256,7 @@ src/netguard/
   alerting.py     console output, JSON-lines log and command hook
   sensor/         sniffer.py: live capture (ARP + TCP SYN) and pcap replay (Scapy)
   audit/          scanner.py (asyncio connect scan), rules.py, report.py
+  web/            Flask dashboard: templates/, static/
   oui.py          MAC vendor lookup and resumable download
   discovery/      arp_scan.py (active), arp_table.py (passive)
   detectors/      new_device.py, presence.py, arp_spoof.py, portscan.py

@@ -16,6 +16,7 @@ Use it only on networks you own or look after.
 | Catch someone port-scanning your machine | `netguard watch` |
 | Check your router and devices for risky open services | `netguard audit --report audit.html` |
 | Analyse a capture file from Wireshark or tcpdump | `netguard watch --pcap file.pcap` |
+| See everything in the browser | `netguard web` |
 | Feed alerts into another tool (jq, Splunk, ELK) | `~/.local/share/netguard/events.jsonl` |
 
 ## 1. Install
@@ -163,6 +164,17 @@ netguard watch --pcap capture.pcap --gateway 192.168.1.1
 ```
 
 This needs no root and saves nothing. It is useful to check a recording later.
+
+### "Show me everything in the browser"
+
+```bash
+netguard web
+```
+
+Open <http://127.0.0.1:8080/>. The dashboard shows how many devices are
+online, alerts from the last 24 hours, the device list, the timeline and the
+latest audit. It refreshes itself every 30 seconds. It only works on this
+computer: there is no login, so it never listens on the network.
 
 ### "I want the alerts in another tool"
 
