@@ -64,8 +64,13 @@ def read_pcap(path: Path) -> Iterator[ArpPacket]:
 def open_capture(iface: str | None):
     """Open a raw socket for ARP frames. Fails at once without root."""
     import scapy.arch  # noqa: F401 - sets conf.L2listen for this operating system
+    import scapy.layers.l2  # noqa: F401 - registers Ethernet as a link type (see below)
     from scapy.config import conf
     from scapy.error import Scapy_Exception
+
+    # A socket picks how to decode frames when it is opened, from the link
+    # types registered at that moment. Without the import above it falls back
+    # to raw bytes, `ARP in pkt` is never true and the capture sees nothing.
 
     try:
         try:

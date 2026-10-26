@@ -160,3 +160,29 @@ def test_capture_reports_a_dead_socket(tmp_path):
     with pytest.raises(CaptureStoppedError, match="interface still up"):
         # The file ends (like a socket dying) while nobody asked to stop.
         capture_arp(replay_socket(tmp_path / "attack.pcap"), lambda pkt: None, threading.Event())
+
+
+def test_capture_socket_decodes_ethernet_in_a_fresh_process():
+    # Found in a live run: the socket was opened before Scapy knew Ethernet,
+    # so every frame was raw bytes and 0 ARP packets were seen. It only shows
+    # in a fresh interpreter, because these tests import Scapy's layers early.
+    import sys
+
+    code = """
+from scapy.config import conf
+import netguard.sensor.arp_sniffer as sniffer
+seen = {}
+def fake_listen(**kwargs):
+    seen["ether"] = conf.l2types.num2layer.get(1)
+    return object()
+import scapy.arch
+conf.L2listen = fake_listen
+sniffer.open_capture("wlan0")
+print(seen["ether"].__name__)
+"""
+    done = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=60,
+        env={"PYTHONPATH": "src", "PATH": "/usr/bin:/bin"},
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "Ether"
