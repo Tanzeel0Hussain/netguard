@@ -8,13 +8,15 @@ import logging
 import sys
 import threading
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from netguard import __version__
 from netguard.alerting import Dispatcher
 from netguard.config import Config, load_config
-from netguard.detectors.arp_spoof import ArpFindings, ArpPacket, ArpWatch, ArpWatchSettings
+from netguard.detectors.arp_spoof import ArpFindings, ArpWatch, ArpWatchSettings
+from netguard.detectors.portscan import PortScanSettings, PortScanWatch, TcpSyn
 from netguard.discovery import ScanPermissionError, discover
 from netguard.discovery.arp_table import read_arp_table
 from netguard.engine import ScanResult, process_scan, record_findings
@@ -28,7 +30,7 @@ from netguard.netinfo import (
 )
 from netguard.oui import MANUF_URL, VendorDB, download
 from netguard.monitor import run_monitor, stop_on_sigterm
-from netguard.sensor.arp_sniffer import capture_arp, open_capture, read_pcap
+from netguard.sensor.sniffer import capture, open_capture, read_pcap
 from netguard.storage import Store
 
 VENDOR_WIDTH = 28
@@ -78,7 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     lookup.add_argument("mac")
 
     watch = sub.add_parser(
-        "watch", help="watch ARP traffic for spoofing / man-in-the-middle (Ctrl+C stops)"
+        "watch", help="watch for ARP spoofing and port scans (Ctrl+C stops)"
     )
     watch.add_argument("--iface", help="network interface, e.g. wlan0")
     watch.add_argument(
@@ -277,52 +279,55 @@ def cmd_alerts(args: argparse.Namespace, config: Config) -> int:
 
 
 def cmd_watch(args: argparse.Namespace, config: Config) -> int:
-    settings = ArpWatchSettings(
+    arp_settings = ArpWatchSettings(
         window=timedelta(seconds=config.arp_window),
         many_ips=config.arp_many_ips,
         flood_replies=config.arp_flood_replies,
     )
+    scan_settings = PortScanSettings(
+        window=timedelta(seconds=config.portscan_window),
+        ports=config.portscan_ports,
+        hosts=config.portscan_hosts,
+    )
     if args.pcap:
-        return _watch_pcap(args, config, settings)
+        return _watch_pcap(args, config, arp_settings, scan_settings)
 
     info = detect_netinfo(iface=args.iface or config.iface)
     sock = open_capture(info.iface)  # first, so a missing permission changes nothing
     gateway = args.gateway or (str(info.gateway) if info.gateway else None)
     bssid = current_bssid(info.iface) or "wired"
+    mine = own_macs()
     logging.basicConfig(format="netguard: %(levelname)s: %(message)s")
     dispatcher = Dispatcher(config.log_path, config.alert_command)
     dedup = timedelta(seconds=config.dedup_window)
-    counts = {"packets": 0, "alerts": 0}
+    counts = _WatchCounts()
 
     with Store(config.db_path) as store:
-        watch = ArpWatch(
+        arp_watch = ArpWatch(
             bindings={d.ip: d.mac for d in store.devices() if d.present},
             gateway_ip=gateway,
             gateway_macs=store.gateway_macs(bssid, gateway) if gateway else (),
-            own_macs=own_macs(),
-            settings=settings,
+            own_macs=mine,
+            settings=arp_settings,
         )
+        scan_watch = PortScanWatch(own_macs=mine, allow_ips=config.portscan_allow, settings=scan_settings)
 
         def handle(findings: ArpFindings) -> None:
             for event in findings.events:
                 if event.kind == "gateway_learned":
                     store.add_gateway_mac(bssid, event.ip, event.mac, event.created_at)
             kept = record_findings(store, findings.alerts, findings.events, utcnow(), dedup)
-            counts["alerts"] += len(kept)
+            counts.alerts += len(kept)
             dispatcher.emit_all(kept, findings.events)
 
         print(
-            f"Watching ARP on {info.iface} (gateway {gateway or 'unknown'}, "
+            f"Watching ARP and TCP SYNs on {info.iface} (gateway {gateway or 'unknown'}, "
             f"access point {bssid}). Press Ctrl+C to stop."
         )
         # Check what this machine already believes: a poisoned cache shows up here first.
         for obs in read_arp_table(info.iface):
             if obs.ip == gateway:
-                handle(watch.check_binding(obs.ip, obs.mac, obs.seen_at, source="the kernel ARP cache"))
-
-        def on_packet(pkt: ArpPacket) -> None:
-            counts["packets"] += 1
-            handle(watch.feed(pkt))
+                handle(arp_watch.check_binding(obs.ip, obs.mac, obs.seen_at, source="the kernel ARP cache"))
 
         stop = threading.Event()
         stop_on_sigterm(stop)
@@ -331,28 +336,52 @@ def cmd_watch(args: argparse.Namespace, config: Config) -> int:
             timer.daemon = True
             timer.start()
         try:
-            capture_arp(sock, on_packet, stop)
+            capture(sock, lambda pkt: handle(_feed(pkt, arp_watch, scan_watch, counts)), stop)
         except KeyboardInterrupt:
             print()
-    print(f"Stopped. {counts['packets']} ARP packet(s), {counts['alerts']} alert(s).")
+    print(f"Stopped. {counts.summary()}.")
     return 0
 
 
-def _watch_pcap(args: argparse.Namespace, config: Config, settings: ArpWatchSettings) -> int:
+def _watch_pcap(
+    args: argparse.Namespace,
+    config: Config,
+    arp_settings: ArpWatchSettings,
+    scan_settings: PortScanSettings,
+) -> int:
     """Offline analysis: report what the capture shows, without touching the database."""
     if not args.pcap.exists():
         raise ValueError(f"{args.pcap} does not exist")
-    watch = ArpWatch(gateway_ip=args.gateway, own_macs=(), settings=settings)
+    arp_watch = ArpWatch(gateway_ip=args.gateway, settings=arp_settings)
+    scan_watch = PortScanWatch(allow_ips=config.portscan_allow, settings=scan_settings)
     dispatcher = Dispatcher()
+    counts = _WatchCounts()
     print(f"Analysing {args.pcap} (gateway {args.gateway or 'not set: use --gateway'})...")
-    packets = alerts = 0
     for pkt in read_pcap(args.pcap):
-        packets += 1
-        findings = watch.feed(pkt)
-        alerts += len(findings.alerts)
+        findings = _feed(pkt, arp_watch, scan_watch, counts)
+        counts.alerts += len(findings.alerts)
         dispatcher.emit_all(findings.alerts, findings.events)
-    print(f"Done. {packets} ARP packet(s), {alerts} alert(s).")
+    print(f"Done. {counts.summary()}.")
     return 0
+
+
+@dataclass
+class _WatchCounts:
+    arp: int = 0
+    syn: int = 0
+    alerts: int = 0
+
+    def summary(self) -> str:
+        return f"{self.arp} ARP packet(s), {self.syn} TCP SYN(s), {self.alerts} alert(s)"
+
+
+def _feed(pkt, arp_watch: ArpWatch, scan_watch: PortScanWatch, counts: _WatchCounts) -> ArpFindings:
+    """Send a captured packet to the detector that understands it."""
+    if isinstance(pkt, TcpSyn):
+        counts.syn += 1
+        return ArpFindings(alerts=scan_watch.feed(pkt))
+    counts.arp += 1
+    return arp_watch.feed(pkt)
 
 
 def cmd_gateway(args: argparse.Namespace, config: Config) -> int:

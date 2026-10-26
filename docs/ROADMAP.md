@@ -43,12 +43,16 @@ Each milestone is one small, reviewable pull request with its own tests.
 - Schema v3: `gateway_macs` table.
 - Tests replay generated pcaps, including an arpspoof-style attack.
 
-## M5: Port-scan detection
+## M5: Port-scan detection ✅
 
-- Sniffer filter for TCP SYN to local hosts.
-- Sliding-window counter per source: more than *Y* distinct ports (or hosts)
-  within *X* seconds raises `port_scan`; thresholds in config.
-- Allow-list so NetGuard's own audit (M6) does not alert.
+- `netguard watch` also captures TCP SYN without ACK (kernel BPF filter:
+  `arp or (tcp[tcpflags] & (tcp-syn|tcp-ack) == tcp-syn)`).
+- Sliding-window detector: `port_scan` (15+ ports on one host in 60 s) and
+  `host_sweep` (one port on 10+ hosts in 60 s); thresholds in `[portscan]`.
+- This machine and `[portscan] allow` sources are never flagged, so the M6
+  audit does not alert.
+- Tracked sources are capped (LRU), so spoofed sources cannot exhaust memory.
+- Tests replay an nmap-style SYN scan through the CLI.
 
 ## M6: Device audit report
 

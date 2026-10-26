@@ -24,3 +24,9 @@
 # window = 60                # seconds, for the two checks below
 # many_ips = 3               # alert when one MAC claims this many IPs in the window
 # flood_replies = 15         # alert on this many unsolicited ARP replies in the window
+
+[portscan]
+# window = 60                # seconds
+# ports = 15                 # alert when one source hits this many ports on one host
+# hosts = 10                 # alert when one source hits one port on this many hosts
+# allow = ["192.168.1.5"]    # e.g. your own vulnerability scanner; this machine is always allowed
