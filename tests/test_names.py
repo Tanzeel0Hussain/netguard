@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from netguard import cli
+from netguard import actions, cli
 from netguard.names import (
     DeviceName,
     find_name,
@@ -138,14 +138,14 @@ def test_find_names_looks_up_each_ip_once():
 def test_scan_saves_names_and_asks_only_for_unnamed_devices(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     found = [obs("192.168.1.30", "aa:aa:aa:aa:aa:30"), obs("192.168.1.40", "aa:aa:aa:aa:aa:40")]
-    monkeypatch.setattr(cli, "discover", lambda *a, **kw: list(found))
+    monkeypatch.setattr(actions, "discover", lambda *a, **kw: list(found))
     asked = []
 
     def fake_find_names(ips):
         asked.append(sorted(ips))
         return {ip: DeviceName("Living-Room-TV", "mdns") for ip in ips if ip == "192.168.1.30"}
 
-    monkeypatch.setattr(cli, "find_names", fake_find_names)
+    monkeypatch.setattr(actions, "find_names", fake_find_names)
     db = str(tmp_path / "netguard.db")
     for _ in range(2):
         assert cli.main(["--db", db, "scan", "--network", "192.168.1.0/24"]) == 0
