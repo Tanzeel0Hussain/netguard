@@ -25,6 +25,7 @@ from netguard.discovery import ScanPermissionError, discover
 from netguard.discovery.arp_table import read_arp_table
 from netguard.engine import ScanResult, process_scan, record_findings
 from netguard.models import Event, is_randomized_mac, normalize_mac, utcnow
+from netguard.names import find_names
 from netguard.netinfo import (
     UnsafeTargetError,
     current_bssid,
@@ -135,6 +136,9 @@ def _add_target_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--network", help="subnet to scan, e.g. 192.168.1.0/24")
     parser.add_argument("--iface", help="network interface, e.g. wlan0")
     parser.add_argument("--timeout", type=float, help="seconds to wait for ARP replies")
+    parser.add_argument(
+        "--no-names", action="store_true", help="do not look up device names (DNS, mDNS, NetBIOS)"
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -243,12 +247,13 @@ def cmd_devices(args: argparse.Namespace, config: Config) -> int:
             _trust_word(d.trusted),
             "online" if d.present else "away",
             d.label or "",
+            d.hostname or "",
             _when(d.first_seen),
             _when(d.last_seen),
         ]
         for d in devices
     ]
-    headers = ["IP", "MAC", "VENDOR", "STATUS", "PRESENCE", "LABEL", "FIRST SEEN", "LAST SEEN"]
+    headers = ["IP", "MAC", "VENDOR", "STATUS", "PRESENCE", "LABEL", "HOSTNAME", "FIRST SEEN", "LAST SEEN"]
     print(_table(headers, rows))
     _vendor_hint(vendors)
     return 0
@@ -607,7 +612,7 @@ def _scan_once(
 ) -> ScanResult:
     timeout = args.timeout if args.timeout is not None else config.scan_timeout
     observations = discover(network, iface=iface, passive=args.passive, timeout=timeout)
-    return process_scan(
+    result = process_scan(
         store,
         observations,
         source="arp-table" if args.passive else "arp-scan",
@@ -615,6 +620,17 @@ def _scan_once(
         away_after=timedelta(seconds=config.away_after),
         dedup_window=timedelta(seconds=config.dedup_window),
     )
+    if not args.no_names:
+        _look_up_names(store, observations)
+    return result
+
+
+def _look_up_names(store: Store, observations) -> None:
+    """Find names for devices that do not have one yet."""
+    # process_scan() has just saved every observed device, so store.device() finds it.
+    unnamed = {o.ip: o.mac for o in observations if not store.device(o.mac).hostname}
+    found = find_names(unnamed)
+    store.set_hostnames({unnamed[ip]: (n.name, n.source) for ip, n in found.items() if ip in unnamed})
 
 
 def _mode(args: argparse.Namespace) -> str:

@@ -14,6 +14,7 @@ def run(tmp_path, monkeypatch, capsys):
     db = tmp_path / "netguard.db"
     found = []
     monkeypatch.setattr(cli, "discover", lambda *a, **kw: list(found))
+    monkeypatch.setattr(cli, "find_names", lambda ips: {})  # no real name lookups in tests
 
     def _run(*args):
         code = cli.main(["--db", str(db), *args])

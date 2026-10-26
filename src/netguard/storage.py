@@ -97,6 +97,11 @@ MIGRATIONS = [
         detail   TEXT NOT NULL
     );
     """,
+    # 5: device names found on the network
+    """
+    ALTER TABLE devices ADD COLUMN hostname TEXT;
+    ALTER TABLE devices ADD COLUMN hostname_source TEXT;
+    """,
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 
@@ -206,6 +211,14 @@ class Store:
                 "UPDATE devices SET label = ? WHERE mac = ?", (label, mac)
             )
         return cursor.rowcount == 1
+
+    def set_hostnames(self, names: dict[str, tuple[str, str]]) -> None:
+        """names: MAC -> (hostname, source)."""
+        with self.conn:
+            self.conn.executemany(
+                "UPDATE devices SET hostname = ?, hostname_source = ? WHERE mac = ?",
+                [(name, source, mac) for mac, (name, source) in names.items()],
+            )
 
     def mark_absent(self, macs: Iterable[str]) -> None:
         with self.conn:
@@ -377,4 +390,6 @@ def _device(row: sqlite3.Row) -> Device:
         trusted=bool(row["trusted"]),
         label=row["label"],
         present=bool(row["present"]),
+        hostname=row["hostname"],
+        hostname_source=row["hostname_source"],
     )

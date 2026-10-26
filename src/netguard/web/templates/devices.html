@@ -15,7 +15,7 @@
       <td class="nowrap">{{ d.ip }}</td>
       <td class="nowrap mono">{{ d.mac }}</td>
       <td>{{ vendor(d.mac) }}</td>
-      <td>{{ d.label or "" }}</td>
+      <td>{{ d.label or "" }}{% if d.hostname %}<div class="muted small" title="found by {{ d.hostname_source }}">{{ d.hostname }}</div>{% endif %}</td>
       <td>{% if d.trusted %}<span class="badge ok">trusted</span>{% else %}<span class="badge warning">untrusted</span>{% endif %}</td>
       <td>{% if d.present %}online{% else %}<span class="muted">away</span>{% endif %}</td>
       <td class="nowrap">{{ when(d.first_seen) }}</td>

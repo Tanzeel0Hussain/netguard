@@ -98,6 +98,7 @@ th { color: var(--muted); font-weight: 600; font-size: .9rem; }
 
 .event { color: var(--muted); font-size: .9rem; }
 .muted { color: var(--muted); }
+.small { font-size: .85em; }
 .mono, code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
 .nowrap { white-space: nowrap; }
 .hint, .empty { color: var(--muted); }

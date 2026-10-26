@@ -52,10 +52,13 @@ class Device:
     trusted: bool = False
     label: str | None = None
     present: bool = True
+    hostname: str | None = None  # from reverse DNS, mDNS or NetBIOS
+    hostname_source: str | None = None
 
     @property
     def name(self) -> str:
-        return f"{self.label} ({self.mac})" if self.label else self.mac
+        known = self.label or self.hostname
+        return f"{known} ({self.mac})" if known else self.mac
 
 
 @dataclass(frozen=True)
