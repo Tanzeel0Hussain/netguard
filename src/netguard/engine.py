@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from netguard.detectors.new_device import detect_new_devices
-from netguard.models import Alert, Observation, utcnow
+from netguard.detectors.presence import detect_presence_changes
+from netguard.models import Alert, Event, Observation, utcnow
 from netguard.storage import Store
 
 
@@ -15,6 +16,7 @@ from netguard.storage import Store
 class ScanResult:
     observations: Sequence[Observation]
     alerts: Sequence[Alert]
+    events: Sequence[Event]
     baseline: bool
 
 
@@ -24,11 +26,29 @@ def process_scan(
     source: str,
     network: str,
     now: datetime | None = None,
+    away_after: timedelta = timedelta(minutes=15),
+    dedup_window: timedelta = timedelta(hours=1),
 ) -> ScanResult:
-    """Run the detectors on one scan, then save the scan and its alerts."""
+    """Run the detectors on one scan, then save the scan, its events and alerts.
+
+    Detectors must see the inventory as it was *before* this scan, so they run
+    first and the scan is saved afterwards.
+    """
     now = now or utcnow()
     baseline = store.is_first_scan()
-    alerts = detect_new_devices(observations, store.known_macs(), baseline, now)
+    devices = store.devices()
+
+    # Only an active scan asks every address, so only it can tell that a device left.
+    complete = source == "arp-scan"
+    events = detect_presence_changes(devices, observations, now, away_after, complete)
+    alerts = [
+        alert
+        for alert in detect_new_devices(observations, {d.mac for d in devices}, baseline, now)
+        if not store.has_recent_alert(alert, since=now - dedup_window)
+    ]
+
     store.record_scan(observations, source=source, network=network, started_at=now)
+    store.mark_absent(e.mac for e in events if e.kind == "left")
+    store.add_events(events)
     store.add_alerts(alerts)
-    return ScanResult(observations=observations, alerts=alerts, baseline=baseline)
+    return ScanResult(observations=observations, alerts=alerts, events=events, baseline=baseline)

@@ -19,7 +19,7 @@ all on a local web dashboard.
 | Device inventory in SQLite, trust/label devices | ✅ v0.1 |
 | Alert when an unknown device joins | ✅ v0.1 |
 | MAC vendor lookup, randomised-MAC detection, device labels | ✅ M2 |
-| Continuous monitoring daemon | 🔜 M3 |
+| Continuous monitoring, presence timeline, JSON-lines log, notify hook | ✅ M3 |
 | ARP spoofing / MITM detection | 🔜 M4 |
 | Port-scan detection | 🔜 M5 |
 | Device audit report (open ports, risky services) | 🔜 M6 |
@@ -57,6 +57,10 @@ sudo .venv/bin/netguard scan
 .venv/bin/netguard devices --untrusted
 .venv/bin/netguard alerts
 
+# Keep watching: scan every 5 minutes, report devices joining, leaving, returning
+sudo .venv/bin/netguard monitor --interval 300
+.venv/bin/netguard timeline
+
 # Optional: download the MAC vendor list once (resumes if the connection drops)
 .venv/bin/netguard oui update
 .venv/bin/netguard oui lookup 8c:6d:77:ab:cd:01
@@ -79,6 +83,22 @@ IP              MAC                VENDOR                        STATUS   LABEL
 The first scan is a **baseline**: everything it finds is recorded without
 alerts. From then on, any MAC address that is not in the inventory raises a
 `new_device` alert.
+
+### Monitoring
+
+`netguard monitor` scans on an interval until you press Ctrl+C (or systemd
+sends SIGTERM). One failed scan, for example while Wi-Fi reconnects, is logged
+and the monitor carries on.
+
+- A device counts as **left** only after it has not answered for
+  `away_after` (15 minutes by default), so a phone that skips one ARP reply in
+  power-saving mode does not flap. Only an active scan can say that a device
+  left; the passive ARP cache can only show that one is there.
+- Every alert and event is appended to `~/.local/share/netguard/events.jsonl`,
+  one JSON object per line, ready for `jq` or a SIEM such as Splunk or ELK.
+- The same alert for the same device is not repeated within `dedup_window`.
+- Set `[alerts] command = ["notify-send", "NetGuard"]` to get a desktop
+  notification per alert. Under sudo the command runs as you, not as root.
 
 ### Configuration
 
@@ -122,9 +142,11 @@ src/netguard/
   netinfo.py      interface/subnet detection and scope checks
   storage.py      SQLite inventory, scans and alerts
   engine.py       runs detectors on a scan and saves the results
+  monitor.py      the scan loop behind `netguard monitor`
+  alerting.py     console output, JSON-lines log and command hook
   oui.py          MAC vendor lookup and resumable download
   discovery/      arp_scan.py (active), arp_table.py (passive)
-  detectors/      new_device.py (more coming)
+  detectors/      new_device.py, presence.py (more coming)
 tests/            pytest suite, no root or network needed
 ```
 
