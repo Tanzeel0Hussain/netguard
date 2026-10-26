@@ -13,9 +13,12 @@ from netguard import __version__
 from netguard.config import Config, load_config
 from netguard.discovery import ScanPermissionError, discover
 from netguard.engine import process_scan
-from netguard.models import normalize_mac
+from netguard.models import is_randomized_mac, normalize_mac
 from netguard.netinfo import UnsafeTargetError, detect_netinfo, validate_scan_target
+from netguard.oui import MANUF_URL, VendorDB, download
 from netguard.storage import Store
+
+VENDOR_WIDTH = 28
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -49,6 +52,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     untrust = sub.add_parser("untrust", help="remove the trusted mark from a device")
     untrust.add_argument("mac")
+
+    label = sub.add_parser("label", help="give a device a name")
+    label.add_argument("mac")
+    label.add_argument("name", nargs="?", help='e.g. "Living room TV"')
+    label.add_argument("--clear", action="store_true", help="remove the name")
+
+    oui = sub.add_parser("oui", help="MAC vendor list")
+    oui_sub = oui.add_subparsers(dest="oui_command", required=True, metavar="ACTION")
+    update = oui_sub.add_parser("update", help="download the vendor list (resumes if interrupted)")
+    update.add_argument("--url", default=MANUF_URL, help="where to download it from")
+    lookup = oui_sub.add_parser("lookup", help="show the vendor of a MAC address")
+    lookup.add_argument("mac")
 
     alerts = sub.add_parser("alerts", help="show recent alerts")
     alerts.add_argument("--limit", type=int, default=20)
@@ -88,6 +103,7 @@ def cmd_scan(args: argparse.Namespace, config: Config) -> int:
 
     observations = discover(network, iface=iface, passive=args.passive, timeout=timeout)
     source = "arp-table" if args.passive else "arp-scan"
+    vendors = VendorDB.load(config.oui_path)
     with Store(config.db_path) as store:
         result = process_scan(store, observations, source=source, network=str(network))
         new_macs = {a.mac for a in result.alerts}
@@ -95,11 +111,11 @@ def cmd_scan(args: argparse.Namespace, config: Config) -> int:
         for obs in observations:
             device = store.device(obs.mac)
             status = "NEW" if obs.mac in new_macs else _trust_word(device.trusted)
-            rows.append([obs.ip, obs.mac, status, device.label or ""])
+            rows.append([obs.ip, obs.mac, _vendor(vendors, obs.mac), status, device.label or ""])
 
     print(f"Found {len(observations)} device(s).")
     if rows:
-        print(_table(["IP", "MAC", "STATUS", "LABEL"], rows))
+        print(_table(["IP", "MAC", "VENDOR", "STATUS", "LABEL"], rows))
     for alert in result.alerts:
         print(f"[!] {alert.message}")
     if result.baseline:
@@ -107,6 +123,7 @@ def cmd_scan(args: argparse.Namespace, config: Config) -> int:
             "\nFirst scan: these devices are now your baseline. Mark the ones you "
             "recognise with `netguard trust <mac> --label NAME`."
         )
+    _vendor_hint(vendors)
     return 0
 
 
@@ -116,12 +133,22 @@ def cmd_devices(args: argparse.Namespace, config: Config) -> int:
     if not devices:
         print("No devices yet. Run `netguard scan` first.")
         return 0
+    vendors = VendorDB.load(config.oui_path)
     devices.sort(key=lambda d: ipaddress.ip_address(d.ip))
     rows = [
-        [d.ip, d.mac, _trust_word(d.trusted), d.label or "", _when(d.first_seen), _when(d.last_seen)]
+        [
+            d.ip,
+            d.mac,
+            _vendor(vendors, d.mac),
+            _trust_word(d.trusted),
+            d.label or "",
+            _when(d.first_seen),
+            _when(d.last_seen),
+        ]
         for d in devices
     ]
-    print(_table(["IP", "MAC", "STATUS", "LABEL", "FIRST SEEN", "LAST SEEN"], rows))
+    print(_table(["IP", "MAC", "VENDOR", "STATUS", "LABEL", "FIRST SEEN", "LAST SEEN"], rows))
+    _vendor_hint(vendors)
     return 0
 
 
@@ -131,6 +158,33 @@ def cmd_trust(args: argparse.Namespace, config: Config) -> int:
 
 def cmd_untrust(args: argparse.Namespace, config: Config) -> int:
     return _set_trust(config, args.mac, False, None)
+
+
+def cmd_label(args: argparse.Namespace, config: Config) -> int:
+    if args.clear == bool(args.name):
+        print("netguard: error: give a NAME or --clear (not both)", file=sys.stderr)
+        return 1
+    mac = normalize_mac(args.mac)
+    with Store(config.db_path) as store:
+        if not store.set_label(mac, None if args.clear else args.name):
+            print(f"netguard: error: {mac} is not in the inventory", file=sys.stderr)
+            return 1
+    print(f"{mac} label cleared." if args.clear else f"{mac} is now labelled {args.name!r}.")
+    return 0
+
+
+def cmd_oui(args: argparse.Namespace, config: Config) -> int:
+    if args.oui_command == "update":
+        print(f"Downloading the vendor list from {args.url} ...")
+        download(args.url, config.oui_path)
+        print(f"Saved {len(VendorDB.load(config.oui_path))} vendor prefixes to {config.oui_path}.")
+        return 0
+
+    mac = normalize_mac(args.mac)
+    vendors = VendorDB.load(config.oui_path)
+    print(f"{mac}  {_vendor(vendors, mac, width=None) or 'unknown vendor'}")
+    _vendor_hint(vendors)
+    return 0
 
 
 def cmd_alerts(args: argparse.Namespace, config: Config) -> int:
@@ -150,6 +204,8 @@ COMMANDS = {
     "devices": cmd_devices,
     "trust": cmd_trust,
     "untrust": cmd_untrust,
+    "label": cmd_label,
+    "oui": cmd_oui,
     "alerts": cmd_alerts,
 }
 
@@ -179,6 +235,20 @@ def _set_trust(config: Config, mac: str, trusted: bool, label: str | None) -> in
             return 1
     print(f"{mac} marked as {_trust_word(trusted)}.")
     return 0
+
+
+def _vendor(vendors: VendorDB, mac: str, width: int | None = VENDOR_WIDTH) -> str:
+    vendor = vendors.lookup(mac)
+    if vendor is None:
+        return "(randomised MAC)" if is_randomized_mac(mac) else ""
+    if width and len(vendor) > width:
+        vendor = vendor[: width - 1] + "…"
+    return vendor
+
+
+def _vendor_hint(vendors: VendorDB) -> None:
+    if not len(vendors):
+        print("\nTip: run `netguard oui update` once to show device vendors.")
 
 
 def _trust_word(trusted: bool) -> str:

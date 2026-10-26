@@ -18,7 +18,7 @@ all on a local web dashboard.
 | Device discovery (active ARP scan + passive ARP cache) | ✅ v0.1 |
 | Device inventory in SQLite, trust/label devices | ✅ v0.1 |
 | Alert when an unknown device joins | ✅ v0.1 |
-| MAC vendor lookup | 🔜 M2 |
+| MAC vendor lookup, randomised-MAC detection, device labels | ✅ M2 |
 | Continuous monitoring daemon | 🔜 M3 |
 | ARP spoofing / MITM detection | 🔜 M4 |
 | Port-scan detection | 🔜 M5 |
@@ -53,8 +53,13 @@ sudo .venv/bin/netguard scan
 # Inventory, trust your own devices, and review alerts
 .venv/bin/netguard devices
 .venv/bin/netguard trust 52:54:00:a1:b2:c3 --label "My phone"
+.venv/bin/netguard label 8c:6d:77:ab:cd:01 "Router"
 .venv/bin/netguard devices --untrusted
 .venv/bin/netguard alerts
+
+# Optional: download the MAC vendor list once (resumes if the connection drops)
+.venv/bin/netguard oui update
+.venv/bin/netguard oui lookup 8c:6d:77:ab:cd:01
 ```
 
 Example:
@@ -63,11 +68,11 @@ Example:
 $ sudo .venv/bin/netguard scan
 Scanning 192.168.100.0/24 on wlp0s20f3 (active ARP scan)...
 Found 3 device(s).
-IP              MAC                STATUS     LABEL
---------------  -----------------  ---------  --------
-192.168.100.1   04:88:5f:12:34:56  trusted    Router
-192.168.100.11  52:54:00:a1:b2:c3  trusted    My phone
-192.168.100.66  de:ad:be:ef:00:01  NEW
+IP              MAC                VENDOR                        STATUS   LABEL
+--------------  -----------------  ----------------------------  -------  --------
+192.168.100.1   8c:6d:77:ab:cd:01  Huawei Technologies Co.,Ltd   trusted  Router
+192.168.100.73  6e:11:22:33:44:73  (randomised MAC)              trusted  My phone
+192.168.100.66  de:ad:be:ef:00:01                                NEW
 [!] Unknown device joined: de:ad:be:ef:00:01 at 192.168.100.66
 ```
 
@@ -97,6 +102,11 @@ when run with `sudo`, and the file stays owned by you).
   with a firewall that drops ping still answer.
 - **Passive discovery** reads `/proc/net/arp`, the kernel's cache of hosts it
   has recently talked to. It sends no packets and needs no root.
+- **Vendor lookup** matches the MAC against the IEEE OUI assignments
+  (Wireshark's `manuf` list), longest prefix first, because the IEEE hands out
+  24-, 28- and 36-bit blocks. MACs with the *locally administered* bit set are
+  shown as randomised: phones make these up per Wi-Fi network for privacy, so
+  they have no vendor.
 - **Detectors** are pure functions (observations in, alerts out). They do no
   I/O, so they are tested with fake data and recorded packets, without root or
   a live network.
@@ -112,6 +122,7 @@ src/netguard/
   netinfo.py      interface/subnet detection and scope checks
   storage.py      SQLite inventory, scans and alerts
   engine.py       runs detectors on a scan and saves the results
+  oui.py          MAC vendor lookup and resumable download
   discovery/      arp_scan.py (active), arp_table.py (passive)
   detectors/      new_device.py (more coming)
 tests/            pytest suite, no root or network needed

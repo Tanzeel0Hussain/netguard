@@ -6,6 +6,7 @@
 
 [storage]
 # db_path = "~/.local/share/netguard/netguard.db"
+# oui_path = "~/.local/share/netguard/manuf"   # vendor list, see `netguard oui update`
 
 [scan]
 # timeout = 2.0              # seconds to wait for ARP replies

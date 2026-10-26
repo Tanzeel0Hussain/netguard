@@ -18,6 +18,15 @@ def normalize_mac(mac: str) -> str:
     return ":".join(digits[i : i + 2] for i in range(0, 12, 2))
 
 
+def is_randomized_mac(mac: str) -> bool:
+    """True if the 'locally administered' bit is set in the first byte.
+
+    Such MACs are not assigned by a manufacturer. Phones and laptops make one up
+    per Wi-Fi network for privacy, so they have no vendor.
+    """
+    return bool(int(mac[:2], 16) & 0x02)
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
 

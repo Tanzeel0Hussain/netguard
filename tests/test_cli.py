@@ -47,6 +47,41 @@ def test_scan_then_list_trust_and_alerts(run):
     assert "WARNING" in out and STRANGER in out
 
 
+def test_label_and_vendor_column(run, tmp_path):
+    manuf = tmp_path / ".local" / "share" / "netguard" / "manuf"
+    manuf.parent.mkdir(parents=True)
+    manuf.write_text("AA:AA:AA\tAcme\tAcme Devices Ltd\n")
+    run.found[:] = [obs("192.168.1.10", PHONE), obs("192.168.1.73", "6e:11:22:33:44:73")]
+    run("scan", "--network", "192.168.1.0/24")
+
+    code, out, _ = run("label", PHONE, "Living room TV")
+    assert code == 0
+
+    code, out, _ = run("devices")
+    phone_row = next(line for line in out.splitlines() if PHONE in line)
+    assert "Acme Devices Ltd" in phone_row and "Living room TV" in phone_row
+    assert "untrusted" in phone_row  # labelling does not trust a device
+    assert "(randomised MAC)" in out
+    assert "oui update" not in out
+
+    code, out, _ = run("label", PHONE, "--clear")
+    assert code == 0
+    code, out, _ = run("oui", "lookup", "aa-aa-aa-00-00-01")
+    assert out.startswith("aa:aa:aa:00:00:01  Acme Devices Ltd")
+
+
+def test_label_needs_a_name_or_clear(run):
+    code, _, err = run("label", PHONE)
+    assert code == 1
+    assert "NAME or --clear" in err
+
+
+def test_vendor_hint_without_the_list(run):
+    run.found[:] = [obs("192.168.1.10", PHONE)]
+    _, out, _ = run("scan", "--network", "192.168.1.0/24")
+    assert "netguard oui update" in out
+
+
 def test_scan_refuses_a_public_network(run):
     code, _, err = run("scan", "--network", "8.8.8.0/24")
     assert code == 1
