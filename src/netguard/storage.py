@@ -2,43 +2,60 @@
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
-from netguard.models import Alert, Device, Observation
+from netguard.config import hand_back_to_sudo_user
+from netguard.models import Alert, Device, Event, Observation
 
-SCHEMA_VERSION = 1
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS devices (
-    mac        TEXT PRIMARY KEY,
-    ip         TEXT NOT NULL,
-    first_seen TEXT NOT NULL,
-    last_seen  TEXT NOT NULL,
-    trusted    INTEGER NOT NULL DEFAULT 0,
-    label      TEXT
-);
-CREATE TABLE IF NOT EXISTS scans (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at   TEXT NOT NULL,
-    source       TEXT NOT NULL,
-    network      TEXT NOT NULL,
-    device_count INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS alerts (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at TEXT NOT NULL,
-    kind       TEXT NOT NULL,
-    severity   TEXT NOT NULL,
-    message    TEXT NOT NULL,
-    mac        TEXT,
-    ip         TEXT
-);
-CREATE INDEX IF NOT EXISTS alerts_created_at ON alerts (created_at);
-"""
+# Each entry upgrades the database by one version. Never edit a released
+# migration: add a new one, so existing databases upgrade in place.
+MIGRATIONS = [
+    # 1: devices, scans and alerts
+    """
+    CREATE TABLE devices (
+        mac        TEXT PRIMARY KEY,
+        ip         TEXT NOT NULL,
+        first_seen TEXT NOT NULL,
+        last_seen  TEXT NOT NULL,
+        trusted    INTEGER NOT NULL DEFAULT 0,
+        label      TEXT
+    );
+    CREATE TABLE scans (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at   TEXT NOT NULL,
+        source       TEXT NOT NULL,
+        network      TEXT NOT NULL,
+        device_count INTEGER NOT NULL
+    );
+    CREATE TABLE alerts (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        kind       TEXT NOT NULL,
+        severity   TEXT NOT NULL,
+        message    TEXT NOT NULL,
+        mac        TEXT,
+        ip         TEXT
+    );
+    CREATE INDEX alerts_created_at ON alerts (created_at);
+    """,
+    # 2: presence tracking and the event timeline
+    """
+    ALTER TABLE devices ADD COLUMN present INTEGER NOT NULL DEFAULT 1;
+    CREATE TABLE events (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        kind       TEXT NOT NULL,
+        message    TEXT NOT NULL,
+        mac        TEXT,
+        ip         TEXT
+    );
+    CREATE INDEX events_created_at ON events (created_at);
+    """,
+]
+SCHEMA_VERSION = len(MIGRATIONS)
 
 
 def _ts(value: datetime) -> str:
@@ -57,11 +74,26 @@ class Store:
             path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
-        with self.conn:
-            self.conn.executescript(SCHEMA)
-            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        self._migrate()
         if path != ":memory:":
-            _hand_back_to_sudo_user(Path(path))
+            hand_back_to_sudo_user(Path(path))
+
+    def _migrate(self) -> None:
+        version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        if version > SCHEMA_VERSION:
+            raise RuntimeError(
+                f"{self.path} was written by a newer NetGuard (schema v{version})"
+            )
+        for number, script in enumerate(MIGRATIONS[version:], start=version + 1):
+            # executescript() commits on its own, so the version bump is part of
+            # the same script: a failed migration leaves the old version number.
+            try:
+                self.conn.executescript(
+                    f"BEGIN; {script}; PRAGMA user_version = {number}; COMMIT;"
+                )
+            except sqlite3.Error:
+                self.conn.rollback()
+                raise
 
     def close(self) -> None:
         self.conn.close()
@@ -95,7 +127,8 @@ class Store:
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT (mac) DO UPDATE SET
                     ip = excluded.ip,
-                    last_seen = excluded.last_seen
+                    last_seen = excluded.last_seen,
+                    present = 1
                 """,
                 [(o.mac, o.ip, _ts(o.seen_at), _ts(o.seen_at)) for o in observations],
             )
@@ -131,7 +164,48 @@ class Store:
             )
         return cursor.rowcount == 1
 
+    def mark_absent(self, macs: Iterable[str]) -> None:
+        with self.conn:
+            self.conn.executemany(
+                "UPDATE devices SET present = 0 WHERE mac = ?", [(mac,) for mac in macs]
+            )
+
+    # --- events ----------------------------------------------------------
+
+    def add_events(self, events: Iterable[Event]) -> None:
+        with self.conn:
+            self.conn.executemany(
+                "INSERT INTO events (created_at, kind, message, mac, ip) VALUES (?, ?, ?, ?, ?)",
+                [(_ts(e.created_at), e.kind, e.message, e.mac, e.ip) for e in events],
+            )
+
+    def events(self, limit: int = 50, mac: str | None = None) -> list[Event]:
+        query, params = "SELECT * FROM events", []
+        if mac:
+            query, params = query + " WHERE mac = ?", [mac]
+        rows = self.conn.execute(
+            query + " ORDER BY created_at DESC, id DESC LIMIT ?", [*params, limit]
+        )
+        return [
+            Event(
+                kind=row["kind"],
+                message=row["message"],
+                created_at=_dt(row["created_at"]),
+                mac=row["mac"],
+                ip=row["ip"],
+            )
+            for row in rows
+        ]
+
     # --- alerts ----------------------------------------------------------
+
+    def has_recent_alert(self, alert: Alert, since: datetime) -> bool:
+        """True if the same kind of alert for the same MAC and IP was raised after `since`."""
+        row = self.conn.execute(
+            "SELECT 1 FROM alerts WHERE kind = ? AND mac IS ? AND ip IS ? AND created_at >= ? LIMIT 1",
+            (alert.kind, alert.mac, alert.ip, _ts(since)),
+        ).fetchone()
+        return row is not None
 
     def add_alerts(self, alerts: Iterable[Alert]) -> None:
         with self.conn:
@@ -141,9 +215,12 @@ class Store:
                 [(_ts(a.created_at), a.kind, a.severity, a.message, a.mac, a.ip) for a in alerts],
             )
 
-    def alerts(self, limit: int = 50) -> list[Alert]:
+    def alerts(self, limit: int = 50, mac: str | None = None) -> list[Alert]:
+        query, params = "SELECT * FROM alerts", []
+        if mac:
+            query, params = query + " WHERE mac = ?", [mac]
         rows = self.conn.execute(
-            "SELECT * FROM alerts ORDER BY created_at DESC, id DESC LIMIT ?", (limit,)
+            query + " ORDER BY created_at DESC, id DESC LIMIT ?", [*params, limit]
         )
         return [
             Alert(
@@ -166,17 +243,5 @@ def _device(row: sqlite3.Row) -> Device:
         last_seen=_dt(row["last_seen"]),
         trusted=bool(row["trusted"]),
         label=row["label"],
+        present=bool(row["present"]),
     )
-
-
-def _hand_back_to_sudo_user(path: Path) -> None:
-    """When run with sudo, keep the database owned by the real user.
-
-    Otherwise a later scan without sudo (e.g. --passive) could not write to it.
-    """
-    uid, gid = os.environ.get("SUDO_UID"), os.environ.get("SUDO_GID")
-    if os.geteuid() != 0 or not uid or not gid:
-        return
-    for target in (path.parent, path):
-        if target.exists() and target.stat().st_uid == 0:
-            os.chown(target, int(uid), int(gid))

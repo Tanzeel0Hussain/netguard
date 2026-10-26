@@ -21,6 +21,19 @@ def default_config_path() -> Path:
     return user_home() / ".config" / "netguard" / "netguard.toml"
 
 
+def hand_back_to_sudo_user(path: Path) -> None:
+    """When run with sudo, keep NetGuard's files owned by the real user.
+
+    Otherwise a later run without sudo (e.g. `scan --passive`) could not write to them.
+    """
+    uid, gid = os.environ.get("SUDO_UID"), os.environ.get("SUDO_GID")
+    if os.geteuid() != 0 or not uid or not gid:
+        return
+    for target in (path.parent, path):
+        if target.exists() and target.stat().st_uid == 0:
+            os.chown(target, int(uid), int(gid))
+
+
 def data_dir() -> Path:
     return user_home() / ".local" / "share" / "netguard"
 
@@ -33,13 +46,22 @@ def default_oui_path() -> Path:
     return data_dir() / "manuf"
 
 
+def default_log_path() -> Path:
+    return data_dir() / "events.jsonl"
+
+
 @dataclass
 class Config:
     iface: str | None = None
     network: str | None = None
     db_path: Path = field(default_factory=default_db_path)
     oui_path: Path = field(default_factory=default_oui_path)
+    log_path: Path | None = field(default_factory=default_log_path)
     scan_timeout: float = 2.0
+    monitor_interval: float = 300
+    away_after: float = 900  # seconds unseen before a device counts as gone
+    dedup_window: float = 3600  # seconds during which a repeated alert is dropped
+    alert_command: list[str] | None = None  # e.g. ["notify-send", "NetGuard"]
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -54,13 +76,27 @@ def load_config(path: Path | None = None) -> Config:
     network = data.get("network", {})
     storage = data.get("storage", {})
     scan = data.get("scan", {})
+    monitor = data.get("monitor", {})
+    alerts = data.get("alerts", {})
     config = Config(
         iface=network.get("iface"),
         network=network.get("cidr"),
         scan_timeout=float(scan.get("timeout", 2.0)),
+        monitor_interval=float(monitor.get("interval", 300)),
+        away_after=float(monitor.get("away_after", 900)),
+        dedup_window=float(alerts.get("dedup_window", 3600)),
+        alert_command=alerts.get("command"),
     )
+    if config.alert_command is not None and (
+        not isinstance(config.alert_command, list)
+        or not all(isinstance(arg, str) for arg in config.alert_command)
+    ):
+        raise ValueError('[alerts] command must be a list of strings, e.g. ["notify-send", "NetGuard"]')
     if "db_path" in storage:
         config.db_path = Path(storage["db_path"]).expanduser()
     if "oui_path" in storage:
         config.oui_path = Path(storage["oui_path"]).expanduser()
+    if "log_path" in alerts:
+        # An empty string turns the log file off.
+        config.log_path = Path(alerts["log_path"]).expanduser() if alerts["log_path"] else None
     return config

@@ -82,6 +82,43 @@ def test_vendor_hint_without_the_list(run):
     assert "netguard oui update" in out
 
 
+def test_monitor_single_scan_and_timeline(run, tmp_path):
+    run.found[:] = [obs("192.168.1.10", PHONE)]
+    code, out, _ = run("monitor", "--network", "192.168.1.0/24", "--count", "1", "--interval", "60")
+    assert code == 0
+    assert "scan #1: 1 seen, 1 online, 0 new alert(s)" in out
+    assert "Stopped after 1 scan(s), 0 failed." in out
+
+    run.found[:] = [obs("192.168.1.10", PHONE), obs("192.168.1.66", STRANGER)]
+    run("scan", "--network", "192.168.1.0/24")
+
+    code, out, _ = run("timeline")
+    assert code == 0
+    lines = out.splitlines()
+    assert "WARNING" in lines[2] and STRANGER in lines[2]  # newest first
+    assert any("first_seen" in line and PHONE in line for line in lines)
+
+    code, out, _ = run("timeline", "--mac", PHONE)
+    assert STRANGER not in out
+
+    log = tmp_path / ".local" / "share" / "netguard" / "events.jsonl"
+    assert '"kind": "new_device"' in log.read_text()
+
+
+def test_monitor_refuses_a_tiny_interval(run):
+    code, _, err = run("monitor", "--network", "192.168.1.0/24", "--interval", "1")
+    assert code == 1
+    assert "at least 10 seconds" in err
+
+
+def test_alert_command_must_be_a_list(run, tmp_path):
+    config = tmp_path / "bad.toml"
+    config.write_text('[alerts]\ncommand = "notify-send"\n')
+    code, _, err = run("--config", str(config), "alerts")
+    assert code == 1
+    assert "must be a list of strings" in err
+
+
 def test_scan_refuses_a_public_network(run):
     code, _, err = run("scan", "--network", "8.8.8.0/24")
     assert code == 1

@@ -10,3 +10,12 @@
 
 [scan]
 # timeout = 2.0              # seconds to wait for ARP replies
+
+[monitor]
+# interval = 300             # seconds between scans in `netguard monitor`
+# away_after = 900           # seconds unseen before a device counts as "left"
+
+[alerts]
+# log_path = "~/.local/share/netguard/events.jsonl"   # JSON lines; "" turns it off
+# dedup_window = 3600        # drop a repeated alert within this many seconds
+# command = ["notify-send", "NetGuard"]   # run for each alert, message added last

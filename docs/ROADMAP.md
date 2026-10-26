@@ -18,12 +18,17 @@ Each milestone is one small, reviewable pull request with its own tests.
 - Flag randomised (locally administered) MACs, which phones use for privacy.
 - `netguard label` and a vendor column in `scan` and `devices`.
 
-## M3: Monitor and alert engine
+## M3: Monitor and alert engine ✅
 
-- `netguard monitor`: scan every N minutes, Ctrl+C to stop.
-- Alert de-duplication and severities; alerts to a JSON-lines log file.
-- "Device left / came back" events for the timeline.
-- Optional desktop notification (`notify-send`) hook.
+- `netguard monitor`: scan every N minutes; Ctrl+C or SIGTERM stops it, and a
+  single failed scan does not.
+- Presence timeline: `first_seen`, `left` and `returned` events, with an
+  `away_after` grace period; `netguard timeline`.
+- Only active scans can mark a device as gone (found in real testing: the
+  passive ARP cache misses idle devices).
+- Alert de-duplication window; every alert and event in a JSON-lines log.
+- Optional command hook per alert (`notify-send`), run as the real user under sudo.
+- Versioned SQLite migrations (schema v2), upgrading existing databases in place.
 
 ## M4: ARP spoofing / MITM detection
 

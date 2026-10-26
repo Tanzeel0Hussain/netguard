@@ -51,6 +51,22 @@ class Device:
     last_seen: datetime
     trusted: bool = False
     label: str | None = None
+    present: bool = True
+
+    @property
+    def name(self) -> str:
+        return f"{self.label} ({self.mac})" if self.label else self.mac
+
+
+@dataclass(frozen=True)
+class Event:
+    """Something that happened on the network, for the timeline (not an alarm)."""
+
+    kind: str  # "first_seen", "left" or "returned"
+    message: str
+    created_at: datetime
+    mac: str | None = None
+    ip: str | None = None
 
 
 @dataclass(frozen=True)
