@@ -252,3 +252,21 @@ def test_capture_filter_compiles():
     except Scapy_Exception as exc:
         pytest.skip(f"no libpcap/tcpdump to compile filters: {exc}")
     assert program.bf_len > 0
+
+
+def test_pcap_replay_in_a_fresh_process(tmp_path):
+    # `watch --pcap` once saw 0 packets for real users: PcapReader picked its
+    # decoder before Ethernet was registered. This suite imports Scapy's layers
+    # early, so only a fresh interpreter shows the bug.
+    import sys
+
+    attack_capture(tmp_path / "attack.pcap")
+    done = subprocess.run(
+        [sys.executable, "-m", "netguard", "watch", "--pcap", str(tmp_path / "attack.pcap"),
+         "--gateway", GATEWAY_IP],
+        capture_output=True, text=True, timeout=60,
+        env={"PYTHONPATH": "src", "HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+    )
+    assert done.returncode == 0, done.stderr
+    assert "unknown LL type" not in done.stderr
+    assert "Done. 22 ARP packet(s), 1 TCP SYN(s), 2 alert(s)." in done.stdout

@@ -73,6 +73,8 @@ def parse_packet(pkt) -> Packet | None:
 
 def read_pcap(path: Path) -> Iterator[Packet]:
     """Replay a capture file, e.g. one recorded with `tcpdump -w`. Needs no root."""
+    import scapy.layers.inet  # noqa: F401 - like open_capture(): the reader picks its
+    import scapy.layers.l2  # noqa: F401 - decoder when the file is opened
     from scapy.error import Scapy_Exception
     from scapy.utils import PcapReader
 
