@@ -123,6 +123,14 @@ class Store:
             )
         return cursor.rowcount == 1
 
+    def set_label(self, mac: str, label: str | None) -> bool:
+        """Name a device (None clears it). Returns False if the MAC is unknown."""
+        with self.conn:
+            cursor = self.conn.execute(
+                "UPDATE devices SET label = ? WHERE mac = ?", (label, mac)
+            )
+        return cursor.rowcount == 1
+
     # --- alerts ----------------------------------------------------------
 
     def add_alerts(self, alerts: Iterable[Alert]) -> None:

@@ -11,12 +11,12 @@ Each milestone is one small, reviewable pull request with its own tests.
 - CLI: `info`, `scan`, `devices`, `trust`, `untrust`, `alerts`.
 - Scope checks: private networks only, at most a /20.
 
-## M2: Device identity
+## M2: Device identity ✅
 
 - MAC vendor lookup from the IEEE OUI list (optional download with resume;
-  works offline without it).
+  works offline without it): `netguard oui update`, `netguard oui lookup`.
 - Flag randomised (locally administered) MACs, which phones use for privacy.
-- `netguard label` and showing vendor in `devices`.
+- `netguard label` and a vendor column in `scan` and `devices`.
 
 ## M3: Monitor and alert engine
 
@@ -30,6 +30,9 @@ Each milestone is one small, reviewable pull request with its own tests.
 - Live sniffer (Scapy `AsyncSniffer`, filter `arp`) feeding detectors.
 - Alerts: known IP answered by a new MAC, gateway MAC changed, one MAC
   claiming many IPs, burst of unsolicited (gratuitous) ARP replies.
+- Avoid a known false positive found in real testing: roaming to another
+  access point on the same subnet changes the gateway MAC. Remember the gateway
+  MAC per Wi-Fi network (SSID/BSSID) instead of globally.
 - Tests replay small pcap files in `tests/data/`.
 
 ## M5: Port-scan detection
