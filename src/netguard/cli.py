@@ -114,6 +114,9 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--host", default="127.0.0.1", help="loopback address to listen on")
     web.add_argument("--port", type=int, default=8080)
 
+    demo = sub.add_parser("demo", help="create made-up data and attack captures to try NetGuard")
+    demo.add_argument("folder", nargs="?", type=Path, default=Path("netguard-demo"))
+
     alerts = sub.add_parser("alerts", help="show recent alerts")
     alerts.add_argument("--limit", type=int, default=20)
 
@@ -544,6 +547,18 @@ def cmd_web(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def cmd_demo(args: argparse.Namespace, config: Config) -> int:
+    from netguard.demo import GATEWAY_IP, build_demo
+
+    paths = build_demo(args.folder)
+    print(f"Demo data written to {args.folder}/. Try:\n")
+    print(f"  netguard --db {paths['db']} web")
+    print(f"  netguard --db {paths['db']} timeline")
+    print(f"  netguard watch --pcap {paths['arp_pcap']} --gateway {GATEWAY_IP}")
+    print(f"  netguard watch --pcap {paths['scan_pcap']}")
+    return 0
+
+
 def cmd_timeline(args: argparse.Namespace, config: Config) -> int:
     mac = normalize_mac(args.mac) if args.mac else None
     with Store(config.db_path) as store:
@@ -564,6 +579,7 @@ COMMANDS = {
     "gateway": cmd_gateway,
     "audit": cmd_audit,
     "web": cmd_web,
+    "demo": cmd_demo,
     "timeline": cmd_timeline,
     "devices": cmd_devices,
     "trust": cmd_trust,
