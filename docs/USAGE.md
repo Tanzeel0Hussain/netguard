@@ -17,6 +17,8 @@ Use it only on networks you own or look after.
 | Check your router and devices for risky open services | `netguard audit --report audit.html` |
 | Analyse a capture file from Wireshark or tcpdump | `netguard watch --pcap file.pcap` |
 | See everything in the browser | `netguard web` |
+| Show NetGuard to someone without a network | `netguard demo` |
+| Keep it running after a reboot | the systemd services in `packaging/systemd/` |
 | Feed alerts into another tool (jq, Splunk, ELK) | `~/.local/share/netguard/events.jsonl` |
 
 ## 1. Install
@@ -183,6 +185,35 @@ Every alert and event is one JSON line in `~/.local/share/netguard/events.jsonl`
 ```bash
 jq 'select(.type == "alert")' ~/.local/share/netguard/events.jsonl
 ```
+
+### "I want to show NetGuard to someone" (no network, no root)
+
+```bash
+netguard demo
+netguard --db netguard-demo/netguard.db web
+netguard watch --pcap netguard-demo/arp-spoof.pcap --gateway 192.168.1.1
+netguard watch --pcap netguard-demo/port-scan.pcap
+```
+
+`netguard demo` writes made-up data into `netguard-demo/`: a week of history
+on six devices, an intruder that joins, tries ARP spoofing and scans the
+laptop, an audit with findings, and recordings of both attacks. Good for an
+interview or a presentation.
+
+### "Keep it running all the time"
+
+The services in `packaging/systemd/` start NetGuard at boot and restart it if
+it stops. They run as your user with only the network permissions they need.
+
+```bash
+sudo cp packaging/systemd/netguard-*@.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now netguard-monitor@$USER netguard-watch@$USER netguard-web@$USER
+```
+
+Check on them with `systemctl status 'netguard-*'` and follow the alerts live
+with `journalctl -u netguard-watch@$USER -f`. To stop them:
+`sudo systemctl disable --now netguard-monitor@$USER netguard-watch@$USER netguard-web@$USER`.
 
 ## 4. What each alert means and what to do
 

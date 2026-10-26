@@ -1,5 +1,7 @@
 # NetGuard
 
+[![CI](https://github.com/Tanzeel0Hussain/netguard/actions/workflows/ci.yml/badge.svg)](https://github.com/Tanzeel0Hussain/netguard/actions/workflows/ci.yml)
+
 **A home network security monitor written in Python and Scapy.**
 
 NetGuard watches your own local network the way a small blue-team sensor would:
@@ -13,19 +15,26 @@ your own devices for risky open services. A local web dashboard shows it all.
 **New here? Read the step-by-step guide: [docs/USAGE.md](docs/USAGE.md).** It
 covers what NetGuard can do, how to do each task, and what every alert means.
 
+![Dashboard overview with an ARP spoofing alert and a port scan](docs/screenshots/overview.png)
+
+![Audit page with risky services and advice](docs/screenshots/audit.png)
+
+*Screenshots use the made-up data from `netguard demo`.*
+
 ## Status
 
 | Feature | Status |
 |---|---|
-| Device discovery (active ARP scan + passive ARP cache) | ✅ v0.1 |
-| Device inventory in SQLite, trust/label devices | ✅ v0.1 |
-| Alert when an unknown device joins | ✅ v0.1 |
+| Device discovery (active ARP scan + passive ARP cache) | ✅ M1 |
+| Device inventory in SQLite, trust/label devices | ✅ M1 |
+| Alert when an unknown device joins | ✅ M1 |
 | MAC vendor lookup, randomised-MAC detection, device labels | ✅ M2 |
 | Continuous monitoring, presence timeline, JSON-lines log, notify hook | ✅ M3 |
 | ARP spoofing / MITM detection (live or from a pcap) | ✅ M4 |
 | Port-scan and host-sweep detection | ✅ M5 |
 | Device audit: open ports, banners, risky services, Markdown/HTML report | ✅ M6 |
 | Local web dashboard and JSON API | ✅ M7 |
+| systemd services, demo data, screenshots, v0.1.0 | ✅ M8 |
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the full plan.
 
@@ -210,6 +219,37 @@ Content-Security-Policy.
 `--pcap` replays a capture (e.g. from `tcpdump -w`) through the same detector.
 It needs no root and writes nothing, which makes it handy for forensics.
 
+### Try it without a network
+
+```bash
+netguard demo                                   # writes netguard-demo/
+netguard --db netguard-demo/netguard.db web     # a week of made-up history
+netguard watch --pcap netguard-demo/arp-spoof.pcap --gateway 192.168.1.1
+netguard watch --pcap netguard-demo/port-scan.pcap
+```
+
+The demo holds six devices, a phone leaving and coming back, an unknown
+device that joins, tries ARP spoofing and port-scans the laptop, and an audit
+with findings. The two captures are recordings of an `arpspoof`-style attack
+and an `nmap -sS` scan. Nothing in it describes a real device.
+
+### Run it all the time (systemd)
+
+[packaging/systemd/](packaging/systemd/) has three services: `monitor`,
+`watch` and `web`. They run as your user, not as root. The capture services
+get only `CAP_NET_RAW` and `CAP_NET_ADMIN`, inside a sandbox where the system
+and your home folder are read-only except NetGuard's data folder.
+
+```bash
+sudo cp packaging/systemd/netguard-*@.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now netguard-monitor@$USER netguard-watch@$USER netguard-web@$USER
+journalctl -u netguard-watch@$USER -f          # follow the alerts
+```
+
+The files expect NetGuard in `~/netguard` with its virtual environment in
+`~/netguard/.venv`; edit `ExecStart` if yours is elsewhere.
+
 ### Configuration
 
 Everything is auto-detected, but you can pin settings in
@@ -257,9 +297,11 @@ src/netguard/
   sensor/         sniffer.py: live capture (ARP + TCP SYN) and pcap replay (Scapy)
   audit/          scanner.py (asyncio connect scan), rules.py, report.py
   web/            Flask dashboard: templates/, static/
+  demo.py         made-up data and attack captures for `netguard demo`
   oui.py          MAC vendor lookup and resumable download
   discovery/      arp_scan.py (active), arp_table.py (passive)
   detectors/      new_device.py, presence.py, arp_spoof.py, portscan.py
+packaging/systemd/  services for monitor, watch and web
 tests/            pytest suite, no root or network needed
 ```
 
